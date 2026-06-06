@@ -1,4 +1,4 @@
-import requests
+import httpx
 from config import settings
 
 
@@ -13,56 +13,42 @@ class DivarService:
             "Accept": "application/json",
         }
 
-    def send_message(
+    async def send_message(
         self,
         conversation_id: str,
         message: str,
     ) -> dict:
-        """
-        ارسال پیام به مکالمه
-        """
-
+        """ارسال پیام به مکالمه"""
         url = (
             f"{self.BASE_URL}"
             f"/v2/open-platform/conversations"
             f"/{conversation_id}/messages"
         )
-
-        payload = {
-            "message": message
-        }
-
-        response = requests.post(
-            url,
-            headers=self.headers,
-            json=payload,
-            timeout=10,
-        )
-
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                headers=self.headers,
+                json={"message": message},
+                timeout=10,
+            )
         response.raise_for_status()
-
         return response.json()
 
-    def get_conversation(
+    async def get_conversation(
         self,
         conversation_id: str,
     ) -> dict:
-        """
-        دریافت اطلاعات مکالمه
-        """
-
+        """دریافت اطلاعات مکالمه"""
         url = (
             f"{self.BASE_URL}"
             f"/v1/open-platform/chat/conversations"
             f"/{conversation_id}"
         )
-
-        response = requests.get(
-            url,
-            headers=self.headers,
-            timeout=10,
-        )
-
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                headers=self.headers,
+                timeout=10,
+            )
         response.raise_for_status()
-
         return response.json()

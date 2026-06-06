@@ -88,3 +88,4 @@ celerybeat.pid
 *.pem
 *.key
 
+plan.md
