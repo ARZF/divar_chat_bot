@@ -1,4 +1,6 @@
 fastapi
-uvicorn
-requests
+uvicorn[standard]
+httpx
 pydantic-settings
+pandas
+openpyxl

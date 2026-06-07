@@ -1,21 +1,16 @@
 import pandas as pd
+from typing import Optional
 
+_prices: dict[str, int] = {}
 
-class PriceLookupService:
-    def __init__(self):
-        self.df = pd.read_excel("data/prices.xlsx")
+def load_prices(filepath: str) -> dict[str, int]:
+    global _prices
+    df = pd.read_excel(filepath)
+    _prices = {
+        str(row["product"]).lower().strip(): int(row["price"])
+        for _, row in df.iterrows()
+    }
+    return _prices
 
-    def get_price(self, product_name: str):
-
-        result = self.df[
-            self.df["product"]
-            .str.lower()
-            .str.strip()
-            ==
-            product_name.lower().strip()
-        ]
-
-        if result.empty:
-            return None
-
-        return result.iloc[0]["price"]
+def get_price(item_name: str) -> Optional[int]:
+    return _prices.get(item_name.lower().strip())
