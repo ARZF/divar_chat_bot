@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 
@@ -9,7 +11,7 @@ class ConversationSchema(BaseModel):
 
 
 class SenderSchema(BaseModel):
-    side: str
+    side: Optional[str] = None
     type: str
 
 
@@ -18,7 +20,7 @@ class NewChatbotMessageSchema(BaseModel):
     conversation: ConversationSchema
     sender: SenderSchema
     type: str
-    sent_at: int
+    sent_at: datetime
     text: str
 
 
