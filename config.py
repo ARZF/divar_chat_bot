@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     DIVAR_APP_SLUG: str
     DIVAR_CLIENT_SECRET: str
     DIVAR_REDIRECT_URI: str
+    admin_token: str
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

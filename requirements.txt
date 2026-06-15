@@ -4,3 +4,4 @@ httpx
 pydantic-settings
 pandas
 openpyxl
+python-multipart

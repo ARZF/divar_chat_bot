@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
+from enum import Enum
 
 
 class ConversationSchema(BaseModel):
@@ -9,6 +10,8 @@ class ConversationSchema(BaseModel):
     type: str
     post_token: Optional[str] = None
 
+class EventType(str, Enum):
+    NEW_CHATBOT_MESSAGE = "NEW_CHATBOT_MESSAGE"
 
 class SenderSchema(BaseModel):
     side: Optional[str] = None
@@ -21,10 +24,10 @@ class NewChatbotMessageSchema(BaseModel):
     sender: SenderSchema
     type: str
     sent_at: datetime
-    text: str
+    text: Optional[str] = None
 
 
 class WebhookSchema(BaseModel):
-    type: str
+    type: EventType
     metadata: Optional[Dict[str, Any]] = None
     new_chatbot_message: Optional[NewChatbotMessageSchema] = None
