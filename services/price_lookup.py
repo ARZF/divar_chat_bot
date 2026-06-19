@@ -95,19 +95,38 @@ def normalize_text(text: str) -> str:
     return " ".join(tokens)
 def _parse_df(df: pd.DataFrame) -> Tuple[dict[str, int], dict[str, str]]:
     """Returns (prices, canonical_names), both keyed by normalized_name.
-
-    If two rows normalize to the same key (e.g. "لپ تاپ X" and "لپتاپ X"),
-    the later row in the file silently wins for both dicts — same behavior
-    as the original code had for _prices, just made explicit here so it's
-    not a surprise during a future refactor.
+    
+    Safely skips rows with missing prices (NaN) or headers treated as data.
     """
     prices: dict[str, int] = {}
     canonical_names: dict[str, str] = {}
+    
     for _, row in df.iterrows():
+        # 1. Clean the price value and check for NaN (blank cells)
+        raw_price = row["price"]
+        if pd.isna(raw_price):
+            continue  # Silently skip empty rows/cells
+            
+        # 2. Convert to string to clean up any spaces or float trailing decimals
+        price_str = str(raw_price).strip()
+        
+        # If your excel has floats like "15000.0", remove the decimal trailing zero
+        if price_str.endswith('.0'):
+            price_str = price_str[:-2]
+            
+        # 3. Check if the value is actually a valid number
+        if not price_str.isdigit():
+            # This catches things like 'قیمت(تومان)', text headers, or messy data
+            print(f"Skipping invalid non-numeric price row: '{price_str}'")
+            continue
+            
+        # 4. Safe to parse now
         raw_name = str(row["product"])
         key = normalize_text(raw_name)
-        prices[key] = int(row["price"])
+        
+        prices[key] = int(price_str)
         canonical_names[key] = raw_name.strip()
+        
     return prices, canonical_names
 def load_prices(filepath: str) -> dict[str, int]:
     global _prices, _product_names, _canonical_names
@@ -149,6 +168,30 @@ def find_top_matches(item_name: str, limit: int = 3) -> list[Tuple[str, float]]:
         return []
     results = process.extract(query, _product_names, scorer=fuzz.WRatio, limit=limit)
     return [(name, score) for name, score, _ in results]
+
+def get_all_matching_prices(item_name: str) -> list[Tuple[str, int]]:
+    """
+    Finds all products whose normalized names contain the normalized user query.
+    Returns a list of tuples: [(canonical_product_name, price), ...]
+    """
+    query = normalize_text(item_name)
+    
+    # If the user input is empty or the catalog isn't loaded, return an empty list
+    if not query or not _prices:
+        return []
+        
+    matches = []
+    
+    # Look through every item in your loaded price dictionary
+    for normalized_key, price in _prices.items():
+        # Check if the user's query is part of the product name string
+        if query in normalized_key:
+            # Fetch the clean display name (canonical name) for the user
+            canonical_name = _canonical_names.get(normalized_key, normalized_key)
+            matches.append((canonical_name, price))
+            
+    return matches
+
 def get_price(item_name: str, threshold: float = 70.0) -> Optional[Tuple[str, int]]:
     """
     Returns a tuple of (canonical_product_name, price) if found, else None.
