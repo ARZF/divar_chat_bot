@@ -3,7 +3,10 @@ from typing import Optional, Tuple
 from config import settings
 from services.price_lookup import get_price, normalize_text, find_top_matches, get_all_matching_prices
 import services.divar as divar_service
+from logging_config import client_id_var, conversation_id_var
+import logging
 
+logger = logging.getLogger("chatbot")
 # In-memory seen conversations (Phase 1 only)
 seen_conversations: set[str] = set()
 
@@ -33,6 +36,10 @@ async def handle_bot_reply(client_id: str, conversation_id: str, user_text: str)
     Main orchestrator for processing user messages and sending the appropriate
     response back via Divar service.
     """
+    client_id_var.set(client_id)
+    conversation_id_var.set(conversation_id)
+    logger.info("processing message", extra={"text": user_text})
+
     is_new = conversation_id not in seen_conversations
     
     if is_new:
@@ -42,6 +49,7 @@ async def handle_bot_reply(client_id: str, conversation_id: str, user_text: str)
     # Leverage the robust normalization pipeline
     normalized_text = normalize_text(user_text)
     intent = _match_intent(normalized_text)
+    logger.info("intent matched", extra={"intent": intent})
 
     if intent == "PRICE":
         product_name = _extract_product_name(normalized_text)
@@ -102,3 +110,4 @@ async def handle_bot_reply(client_id: str, conversation_id: str, user_text: str)
         reply = settings.FALLBACK_MESSAGE
 
     await divar_service.send_message(conversation_id, reply)
+    logger.info("reply sent", extra={"text": reply})

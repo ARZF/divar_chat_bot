@@ -4,8 +4,11 @@ from fastapi.responses import JSONResponse
 from schemas.webhook import WebhookSchema
 from config import settings
 from services.chatbot import handle_bot_reply
+from logging_config import client_id_var, conversation_id_var
+import logging
 
 router = APIRouter()
+logger = logging.getLogger("webhook")
 
 @router.post("/api/v1/webhook/{client_id}")
 async def webhook(
@@ -18,6 +21,7 @@ async def webhook(
     if not authorization or not hmac.compare_digest(
         authorization, settings.DIVAR_IDENTIFICATION_KEY
     ):
+        logger.warning("webhook auth failed")
         return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
 
     # 2. Event Filtering
@@ -27,7 +31,9 @@ async def webhook(
     # 3. Data Extraction
     conversation_id = payload.new_chatbot_message.conversation.id
     user_text = payload.new_chatbot_message.text
-
+    conversation_id_var.set(conversation_id)
+    logger.info("incoming message", extra={"text": user_text})
+    
     # 4. Hand off to the Chatbot Service asynchronously
     background_tasks.add_task(handle_bot_reply, client_id, conversation_id, user_text)
 

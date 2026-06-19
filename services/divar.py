@@ -1,5 +1,8 @@
+import logging
 import httpx
 from config import settings
+
+logger = logging.getLogger("divar")
 
 client: httpx.AsyncClient = None  # Set at startup via lifespan in main.py
 
@@ -39,7 +42,13 @@ async def send_message(conversation_id: str, text: str) -> bool:
         settings.DIVAR_ACCESS_TOKEN = await refresh_access_token()
         response = await client.post(url, headers=_headers(), json=payload)
 
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        logger.error("send_message failed", extra={"status_code": response.status_code})
+        raise
+
+    logger.info("send_message succeeded", extra={"status_code": response.status_code})
     return True
 
 
