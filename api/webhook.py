@@ -17,6 +17,7 @@ async def webhook(
     background_tasks: BackgroundTasks,
     authorization: str = Header(None),
 ):
+    client_id_var.set(client_id)
     # 1. Security Gate
     if not authorization or not hmac.compare_digest(
         authorization, settings.DIVAR_IDENTIFICATION_KEY

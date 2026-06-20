@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     WARRANTY_MESSAGE: str = "محصولات ما دارای گارانتی ۱۲ ماهه هستند."
     SUPPORT_MESSAGE: str = "تیم پشتیبانی ما در ساعات کاری ۹ تا ۱۸ پاسخگوی شما هستند."
     FALLBACK_MESSAGE: str = "پیام شما دریافت شد. برای راهنمایی بیشتر با پشتیبانی تماس بگیرید."
-
+    GREETING_REPLY_MESSAGE: str = "بفرمایید! چطور می‌توانم کمک کنم؟"
     GREETING_TOKENS: FrozenSet[str] = frozenset([
         "سلام", "درود", "سلامت", "هلو", "hi", "hello", "hey"
     ])

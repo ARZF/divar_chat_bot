@@ -4,11 +4,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.webhook import router as webhook_router
 from api.oauth import router as oauth_router
 from api.admin import router as admin_router
+from logging_config import setup_logging
 import services.divar as divar_service
 import httpx
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_logging()
     divar_service.client = httpx.AsyncClient(timeout=10)
     yield
     await divar_service.client.aclose()

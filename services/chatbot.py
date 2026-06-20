@@ -49,7 +49,7 @@ async def handle_bot_reply(client_id: str, conversation_id: str, user_text: str)
     # Leverage the robust normalization pipeline
     normalized_text = normalize_text(user_text)
     intent = _match_intent(normalized_text)
-    logger.info("intent matched", extra={"intent": intent})
+    logger.info("intent matched", extra={"intent": intent, "text": user_text})
 
     if intent == "PRICE":
         product_name = _extract_product_name(normalized_text)
@@ -105,6 +105,10 @@ async def handle_bot_reply(client_id: str, conversation_id: str, user_text: str)
     elif intent == "SUPPORT":
         reply = settings.SUPPORT_MESSAGE
     elif _is_pure_greeting(normalized_text):
+        if is_new:
+            return
+        reply = settings.GREETING_REPLY_MESSAGE
+        await divar_service.send_message(conversation_id, reply)
         return
     else:
         reply = settings.FALLBACK_MESSAGE
