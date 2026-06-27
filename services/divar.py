@@ -18,18 +18,21 @@ def _headers() -> dict:
     }
 
 
-async def refresh_access_token() -> str:
+async def refresh_access_token(current_access_token: str) -> tuple[str, str]:
     response = await client.post(
         "https://oauth.divar.ir/oauth2/token",
         data={
-            "grant_type": "refresh_token",
-            "refresh_token": settings.DIVAR_REFRESH_TOKEN,
+            "code": current_access_token,
             "client_id": settings.DIVAR_APP_SLUG,
             "client_secret": settings.DIVAR_CLIENT_SECRET,
+            "grant_type": "refresh_token",
+            "redirect_uri": settings.DIVAR_REDIRECT_URI,
+            "refresh_token": settings.DIVAR_REFRESH_TOKEN,
         }
     )
     response.raise_for_status()
-    return response.json()["access_token"]
+    token_data = response.json()
+    return token_data["access_token"], token_data["refresh_token"]
 
 
 async def send_message(conversation_id: str, text: str) -> bool:
@@ -40,7 +43,7 @@ async def send_message(conversation_id: str, text: str) -> bool:
 
     if response.status_code in (401, 403):
         logger.info("access token invalid, refreshing")
-        settings.DIVAR_ACCESS_TOKEN = await refresh_access_token()
+        settings.DIVAR_ACCESS_TOKEN, settings.DIVAR_REFRESH_TOKEN = await refresh_access_token(settings.DIVAR_ACCESS_TOKEN)
         response = await client.post(url, headers=_headers(), json=payload)
 
     try:
@@ -62,7 +65,7 @@ async def get_conversation(conversation_id: str) -> dict:
 
     if response.status_code in (401, 403) and "Invalid access token" in response.text:
         logger.info("access token invalid, refreshing")
-        settings.DIVAR_ACCESS_TOKEN = await refresh_access_token()
+        settings.DIVAR_ACCESS_TOKEN, settings.DIVAR_REFRESH_TOKEN = await refresh_access_token(settings.DIVAR_ACCESS_TOKEN)
         response = await client.get(url, headers=_headers())
 
     try:

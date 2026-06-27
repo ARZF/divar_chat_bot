@@ -96,7 +96,7 @@ async def test_send_message_401_triggers_refresh_and_retry(httpx_mock, mocker):
         httpx.Response(200, json={"status": "ok"}),
     ]
     mock_refresh = mocker.patch.object(
-        divar, "refresh_access_token", new_callable=AsyncMock, return_value="new_token"
+        divar, "refresh_access_token", new_callable=AsyncMock, return_value=("new_token", "new_refresh_token")
     )
 
     result = await divar.send_message("conv_123", "Hello")
@@ -115,7 +115,7 @@ async def test_send_message_403_triggers_refresh_and_retry(httpx_mock, mocker):
         httpx.Response(200, json={"status": "ok"}),
     ]
     mock_refresh = mocker.patch.object(
-        divar, "refresh_access_token", new_callable=AsyncMock, return_value="new_token"
+        divar, "refresh_access_token", new_callable=AsyncMock, return_value=("new_token", "new_refresh_token")
     )
 
     result = await divar.send_message("conv_123", "Hello")
@@ -134,7 +134,7 @@ async def test_send_message_retry_exactly_once(httpx_mock, mocker):
         httpx.Response(401),
     ]
     mock_refresh = mocker.patch.object(
-        divar, "refresh_access_token", new_callable=AsyncMock, return_value="new_token"
+        divar, "refresh_access_token", new_callable=AsyncMock, return_value=("new_token", "new_refresh_token")
     )
 
     with pytest.raises(httpx.HTTPStatusError):
@@ -188,7 +188,7 @@ async def test_get_conversation_401_with_invalid_token_text_triggers_refresh(
         httpx.Response(200, json={"id": "conv_123"}),
     ]
     mock_refresh = mocker.patch.object(
-        divar, "refresh_access_token", new_callable=AsyncMock, return_value="new_token"
+        divar, "refresh_access_token", new_callable=AsyncMock, return_value=("new_token", "new_refresh_token")
     )
 
     result = await divar.get_conversation("conv_123")
@@ -209,7 +209,7 @@ async def test_get_conversation_403_with_invalid_token_text_triggers_refresh(
         httpx.Response(200, json={"id": "conv_123"}),
     ]
     mock_refresh = mocker.patch.object(
-        divar, "refresh_access_token", new_callable=AsyncMock, return_value="new_token"
+        divar, "refresh_access_token", new_callable=AsyncMock, return_value=("new_token", "new_refresh_token")
     )
 
     result = await divar.get_conversation("conv_123")
@@ -256,7 +256,7 @@ async def test_get_conversation_retry_exactly_once(httpx_mock, mocker):
         httpx.Response(401, text="Invalid access token"),
     ]
     mock_refresh = mocker.patch.object(
-        divar, "refresh_access_token", new_callable=AsyncMock, return_value="new_token"
+        divar, "refresh_access_token", new_callable=AsyncMock, return_value=("new_token", "new_refresh_token")
     )
 
     with pytest.raises(httpx.HTTPStatusError):
@@ -271,78 +271,13 @@ async def test_get_conversation_retry_exactly_once(httpx_mock, mocker):
 
 
 @pytest.mark.asyncio
-async def test_refresh_access_token_currently_broken_missing_code_and_redirect_uri(
-    httpx_mock,
-):
-    """
-    PLAN.md bug 1.B1: refresh_access_token() is missing the `code` and `redirect_uri`
-    fields in the refresh request body.  Per docs/oauth/ReadMe.md step 5, the request
-    must include `code` (set to the *current* access token) and `redirect_uri`.
-
-    The attribute-name portion of 1.B1 (DIVAR_CLIENT_ID → DIVAR_APP_SLUG) has already
-    been fixed in the current source, so this function no longer raises AttributeError.
-    But the request body is still incomplete.  When 1.B1 is fully fixed (adding `code`
-    and `redirect_uri`), the assertions below about their absence will FAIL — that is the
-    signal to delete this test and activate the xfail test at the bottom of this file.
-    """
-    route = httpx_mock.post(TOKEN_URL).respond(200, json={"access_token": "new_token"})
-
-    result = await divar.refresh_access_token()
-
-    assert result == "new_token"
-    assert route.called
-
-    request = route.calls[0].request
-    body = parse_qs(request.content.decode())
-
-    assert body["grant_type"] == ["refresh_token"]
-    assert body["client_id"] == ["test_app_slug"]
-    assert body["client_secret"] == ["test_client_secret"]
-    assert body["refresh_token"] == ["test_refresh_token"]
-
-    # BUG (1.B1): these fields are MISSING from the current request body.
-    # When the fix lands, these assertions will fail — replace this test.
-    assert "code" not in body, "code field should be absent (bug 1.B1 not yet fixed)"
-    assert "redirect_uri" not in body, (
-        "redirect_uri field should be absent (bug 1.B1 not yet fixed)"
-    )
-
-
-@pytest.mark.asyncio
-async def test_refresh_access_token_returns_only_access_token(httpx_mock):
-    """
-    PLAN.md 1.B1: a successful refresh returns BOTH a new access_token and a new
-    refresh_token (the old refresh_token becomes invalid).  The current implementation
-    only returns access_token — the caller never sees the new refresh_token and cannot
-    persist it.  When 1.B1 is fixed, update this test to verify both are returned.
-    """
-    httpx_mock.post(TOKEN_URL).respond(
-        200,
-        json={
-            "access_token": "new_access_token",
-            "refresh_token": "new_refresh_token",
-            "expires_in": 3600,
-            "token_type": "bearer",
-        },
-    )
-
-    result = await divar.refresh_access_token()
-
-    # Current behavior: only returns the access_token string
-    assert result == "new_access_token"
-
-
-@pytest.mark.asyncio
-@pytest.mark.xfail(
-    reason="PLAN.md 1.B1 not yet fully fixed — missing `code` and `redirect_uri` in request body",
-    strict=True,
-)
 async def test_refresh_access_token_correct_post_fix_behavior(httpx_mock):
     """
     Post-fix behavior per PLAN.md 1.B1 and docs/oauth/ReadMe.md step 5:
     - Request body includes `code` (current access token), `redirect_uri`,
       `client_id` (=DIVAR_APP_SLUG), `client_secret`, `grant_type=refresh_token`,
       `refresh_token`
+    - Returns a tuple of (new_access_token, new_refresh_token)
     """
     route = httpx_mock.post(TOKEN_URL).respond(
         200,
@@ -352,11 +287,16 @@ async def test_refresh_access_token_correct_post_fix_behavior(httpx_mock):
         },
     )
 
-    await divar.refresh_access_token()
+    result = await divar.refresh_access_token(settings.DIVAR_ACCESS_TOKEN)
 
+    assert result == ("new_access_token", "new_refresh_token")
     assert route.called
     request = route.calls[0].request
     body = parse_qs(request.content.decode())
 
     assert body["code"] == ["test_access_token"]
     assert body["redirect_uri"] == ["https://example.com/callback"]
+    assert body["client_id"] == ["test_app_slug"]
+    assert body["client_secret"] == ["test_client_secret"]
+    assert body["grant_type"] == ["refresh_token"]
+    assert body["refresh_token"] == ["test_refresh_token"]
