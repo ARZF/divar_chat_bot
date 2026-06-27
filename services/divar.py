@@ -24,7 +24,7 @@ async def refresh_access_token() -> str:
         data={
             "grant_type": "refresh_token",
             "refresh_token": settings.DIVAR_REFRESH_TOKEN,
-            "client_id": settings.DIVAR_CLIENT_ID,
+            "client_id": settings.DIVAR_APP_SLUG,
             "client_secret": settings.DIVAR_CLIENT_SECRET,
         }
     )
@@ -34,18 +34,22 @@ async def refresh_access_token() -> str:
 
 async def send_message(conversation_id: str, text: str) -> bool:
     url = f"{BASE_URL}/v1/open-platform/chat/bot/conversations/{conversation_id}/messages"
-    payload = {"text_message": text}
+    payload = {"type": "TEXT", "text_message": text}
 
     response = await client.post(url, headers=_headers(), json=payload)
 
-    if response.status_code == 401:
+    if response.status_code in (401, 403):
+        logger.info("access token invalid, refreshing")
         settings.DIVAR_ACCESS_TOKEN = await refresh_access_token()
         response = await client.post(url, headers=_headers(), json=payload)
 
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError:
-        logger.error("send_message failed", extra={"status_code": response.status_code})
+        logger.error("send_message failed", extra={
+            "status_code": response.status_code,
+            "response_body": response.text
+        })
         raise
 
     logger.info("send_message succeeded", extra={"status_code": response.status_code})
@@ -56,9 +60,16 @@ async def get_conversation(conversation_id: str) -> dict:
     url = f"{BASE_URL}/v1/open-platform/chat/conversations/{conversation_id}"
     response = await client.get(url, headers=_headers())
 
-    if response.status_code == 401:
+    if response.status_code in (401, 403) and "Invalid access token" in response.text:
+        logger.info("access token invalid, refreshing")
         settings.DIVAR_ACCESS_TOKEN = await refresh_access_token()
         response = await client.get(url, headers=_headers())
 
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        logger.error("get_conversation failed", extra={"status_code": response.status_code})
+        raise
+
+    logger.info("get_conversation succeeded", extra={"status_code": response.status_code})
     return response.json()
