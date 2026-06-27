@@ -1,7 +1,8 @@
-fastapi
-uvicorn[standard]
-httpx
-pydantic-settings
-pandas
-openpyxl
-python-multipart
+fastapi==0.136.3
+uvicorn[standard]==0.49.0
+httpx==0.28.1
+pydantic-settings==2.14.1
+pandas==3.0.3
+openpyxl==3.1.5
+python-multipart==0.0.32
+RapidFuzz==3.14.5
