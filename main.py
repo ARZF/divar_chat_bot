@@ -11,7 +11,7 @@ import httpx
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
-    divar_service.client = httpx.AsyncClient(timeout=10)
+    divar_service.client = httpx.AsyncClient(timeout=60)
     yield
     await divar_service.client.aclose()
 
