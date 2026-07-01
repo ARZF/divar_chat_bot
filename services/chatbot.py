@@ -106,9 +106,11 @@ async def handle_bot_reply(client_id: str, conversation_id: str, user_text: str)
         reply = settings.SUPPORT_MESSAGE
     elif _is_pure_greeting(normalized_text):
         if is_new:
+            logger.info("greeting suppressed — welcome already sent")
             return
         reply = settings.GREETING_REPLY_MESSAGE
         await divar_service.send_message(conversation_id, reply)
+        logger.info("reply sent", extra={"text": reply})
         return
     else:
         reply = settings.FALLBACK_MESSAGE

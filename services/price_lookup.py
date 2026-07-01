@@ -1,6 +1,9 @@
+import logging
 import pandas as pd
 from typing import Optional, Tuple
 from rapidfuzz import fuzz, process
+
+logger = logging.getLogger("price_lookup")
 # normalized_name -> price
 _prices: dict[str, int] = {}
 # normalized_name -> original/canonical name as written in the source file
@@ -117,7 +120,7 @@ def _parse_df(df: pd.DataFrame) -> Tuple[dict[str, int], dict[str, str]]:
         # 3. Check if the value is actually a valid number
         if not price_str.isdigit():
             # This catches things like 'قیمت(تومان)', text headers, or messy data
-            print(f"Skipping invalid non-numeric price row: '{price_str}'")
+            logger.warning("Skipping invalid non-numeric price row", extra={"raw_price": price_str})
             continue
             
         # 4. Safe to parse now
