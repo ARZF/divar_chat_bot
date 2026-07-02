@@ -87,61 +87,46 @@ async def test_send_message_500_raises(httpx_mock):
 
 
 @pytest.mark.asyncio
-async def test_send_message_401_triggers_refresh_and_retry(httpx_mock, mocker):
+async def test_send_message_401_raises_without_refresh(httpx_mock, mocker):
+    """401 from X-Api-Key auth means the API key is wrong — no OAuth refresh attempted."""
     url = SEND_MSG_URL.format(conv_id="conv_123")
-    # First call returns 401, second returns 200
-    route = httpx_mock.post(url)
-    route.side_effect = [
-        httpx.Response(401),
-        httpx.Response(200, json={"status": "ok"}),
-    ]
+    httpx_mock.post(url).respond(401, text="Unauthorized")
     mock_refresh = mocker.patch.object(
-        divar, "refresh_access_token", new_callable=AsyncMock, return_value=("new_token", "new_refresh_token")
-    )
-
-    result = await divar.send_message("conv_123", "Hello")
-
-    assert result is True
-    mock_refresh.assert_awaited_once()
-    assert settings.DIVAR_ACCESS_TOKEN == "new_token"
-
-
-@pytest.mark.asyncio
-async def test_send_message_403_triggers_refresh_and_retry(httpx_mock, mocker):
-    url = SEND_MSG_URL.format(conv_id="conv_123")
-    route = httpx_mock.post(url)
-    route.side_effect = [
-        httpx.Response(403),
-        httpx.Response(200, json={"status": "ok"}),
-    ]
-    mock_refresh = mocker.patch.object(
-        divar, "refresh_access_token", new_callable=AsyncMock, return_value=("new_token", "new_refresh_token")
-    )
-
-    result = await divar.send_message("conv_123", "Hello")
-
-    assert result is True
-    mock_refresh.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_send_message_retry_exactly_once(httpx_mock, mocker):
-    """If the retried request also fails, the error propagates — no infinite retry loop."""
-    url = SEND_MSG_URL.format(conv_id="conv_123")
-    route = httpx_mock.post(url)
-    route.side_effect = [
-        httpx.Response(401),
-        httpx.Response(401),
-    ]
-    mock_refresh = mocker.patch.object(
-        divar, "refresh_access_token", new_callable=AsyncMock, return_value=("new_token", "new_refresh_token")
+        divar, "refresh_access_token", new_callable=AsyncMock
     )
 
     with pytest.raises(httpx.HTTPStatusError):
         await divar.send_message("conv_123", "Hello")
 
-    # refresh called exactly once, request made exactly twice (original + 1 retry)
-    mock_refresh.assert_awaited_once()
+    mock_refresh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_message_403_raises_without_refresh(httpx_mock, mocker):
+    """403 from X-Api-Key auth means the API key lacks permission — no OAuth refresh attempted."""
+    url = SEND_MSG_URL.format(conv_id="conv_123")
+    httpx_mock.post(url).respond(403, text="Forbidden")
+    mock_refresh = mocker.patch.object(
+        divar, "refresh_access_token", new_callable=AsyncMock
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await divar.send_message("conv_123", "Hello")
+
+    mock_refresh.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_send_message_401_logs_api_key_error(httpx_mock, caplog):
+    """401 must log a clear message pointing at DIVAR_API_KEY in .env."""
+    url = SEND_MSG_URL.format(conv_id="conv_123")
+    httpx_mock.post(url).respond(401, text="Unauthorized")
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await divar.send_message("conv_123", "Hello")
+
+    assert any("DIVAR_API_KEY" in record.message for record in caplog.records)
+    assert any("X-Api-Key" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -173,56 +158,10 @@ async def test_get_conversation_non_200_raises(httpx_mock):
 
 
 @pytest.mark.asyncio
-async def test_get_conversation_401_with_invalid_token_text_triggers_refresh(
-    httpx_mock, mocker
-):
-    """
-    get_conversation only retries when status is 401/403 AND 'Invalid access token'
-    is in the response text.  This is different from send_message, which retries on
-    status code alone.
-    """
+async def test_get_conversation_401_raises_without_refresh(httpx_mock, mocker):
+    """401 from X-Api-Key auth means the API key is wrong — no OAuth refresh attempted."""
     url = GET_CONV_URL.format(conv_id="conv_123")
-    route = httpx_mock.get(url)
-    route.side_effect = [
-        httpx.Response(401, text="Invalid access token"),
-        httpx.Response(200, json={"id": "conv_123"}),
-    ]
-    mock_refresh = mocker.patch.object(
-        divar, "refresh_access_token", new_callable=AsyncMock, return_value=("new_token", "new_refresh_token")
-    )
-
-    result = await divar.get_conversation("conv_123")
-
-    assert result == {"id": "conv_123"}
-    mock_refresh.assert_awaited_once()
-    assert settings.DIVAR_ACCESS_TOKEN == "new_token"
-
-
-@pytest.mark.asyncio
-async def test_get_conversation_403_with_invalid_token_text_triggers_refresh(
-    httpx_mock, mocker
-):
-    url = GET_CONV_URL.format(conv_id="conv_123")
-    route = httpx_mock.get(url)
-    route.side_effect = [
-        httpx.Response(403, text="Invalid access token"),
-        httpx.Response(200, json={"id": "conv_123"}),
-    ]
-    mock_refresh = mocker.patch.object(
-        divar, "refresh_access_token", new_callable=AsyncMock, return_value=("new_token", "new_refresh_token")
-    )
-
-    result = await divar.get_conversation("conv_123")
-
-    assert result == {"id": "conv_123"}
-    mock_refresh.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_get_conversation_401_without_matching_text_no_refresh(httpx_mock, mocker):
-    """401 without 'Invalid access token' in body → no refresh, error propagates."""
-    url = GET_CONV_URL.format(conv_id="conv_123")
-    httpx_mock.get(url).respond(401, text="Some other error")
+    httpx_mock.get(url).respond(401, text="Invalid access token")
     mock_refresh = mocker.patch.object(
         divar, "refresh_access_token", new_callable=AsyncMock
     )
@@ -234,7 +173,8 @@ async def test_get_conversation_401_without_matching_text_no_refresh(httpx_mock,
 
 
 @pytest.mark.asyncio
-async def test_get_conversation_403_without_matching_text_no_refresh(httpx_mock, mocker):
+async def test_get_conversation_403_raises_without_refresh(httpx_mock, mocker):
+    """403 from X-Api-Key auth means the API key lacks permission — no OAuth refresh attempted."""
     url = GET_CONV_URL.format(conv_id="conv_123")
     httpx_mock.get(url).respond(403, text="Forbidden")
     mock_refresh = mocker.patch.object(
@@ -248,21 +188,16 @@ async def test_get_conversation_403_without_matching_text_no_refresh(httpx_mock,
 
 
 @pytest.mark.asyncio
-async def test_get_conversation_retry_exactly_once(httpx_mock, mocker):
+async def test_get_conversation_401_logs_api_key_error(httpx_mock, caplog):
+    """401 must log a clear message pointing at DIVAR_API_KEY in .env."""
     url = GET_CONV_URL.format(conv_id="conv_123")
-    route = httpx_mock.get(url)
-    route.side_effect = [
-        httpx.Response(401, text="Invalid access token"),
-        httpx.Response(401, text="Invalid access token"),
-    ]
-    mock_refresh = mocker.patch.object(
-        divar, "refresh_access_token", new_callable=AsyncMock, return_value=("new_token", "new_refresh_token")
-    )
+    httpx_mock.get(url).respond(401, text="Unauthorized")
 
     with pytest.raises(httpx.HTTPStatusError):
         await divar.get_conversation("conv_123")
 
-    mock_refresh.assert_awaited_once()
+    assert any("DIVAR_API_KEY" in record.message for record in caplog.records)
+    assert any("X-Api-Key" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------

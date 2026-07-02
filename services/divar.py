@@ -41,18 +41,24 @@ async def send_message(conversation_id: str, text: str) -> bool:
 
     response = await client.post(url, headers=_headers(), json=payload)
 
-    if response.status_code in (401, 403):
-        logger.info("access token invalid, refreshing")
-        settings.DIVAR_ACCESS_TOKEN, settings.DIVAR_REFRESH_TOKEN = await refresh_access_token(settings.DIVAR_ACCESS_TOKEN)
-        response = await client.post(url, headers=_headers(), json=payload)
+    # NOTE: This endpoint authenticates via X-Api-Key, not OAuth.
+    # A 401/403 here means the API key is invalid — refreshing an OAuth
+    # token cannot fix it. Do not auto-refresh; let the error propagate.
 
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError:
-        logger.error("send_message failed", extra={
-            "status_code": response.status_code,
-            "response_body": response.text
-        })
+        if response.status_code in (401, 403):
+            logger.error(
+                "send_message auth failed — DIVAR_API_KEY is invalid or missing required scope. "
+                "This endpoint uses X-Api-Key, NOT OAuth. Check DIVAR_API_KEY in .env",
+                extra={"status_code": response.status_code, "response_body": response.text}
+            )
+        else:
+            logger.error("send_message failed", extra={
+                "status_code": response.status_code,
+                "response_body": response.text
+            })
         raise
 
     logger.info("send_message succeeded", extra={"status_code": response.status_code})
@@ -63,15 +69,23 @@ async def get_conversation(conversation_id: str) -> dict:
     url = f"{BASE_URL}/v1/open-platform/chat/conversations/{conversation_id}"
     response = await client.get(url, headers=_headers())
 
-    if response.status_code in (401, 403) and "Invalid access token" in response.text:
-        logger.info("access token invalid, refreshing")
-        settings.DIVAR_ACCESS_TOKEN, settings.DIVAR_REFRESH_TOKEN = await refresh_access_token(settings.DIVAR_ACCESS_TOKEN)
-        response = await client.get(url, headers=_headers())
+    # NOTE: This endpoint authenticates via X-Api-Key, not OAuth.
+    # A 401/403 here means the API key is invalid — refreshing an OAuth
+    # token cannot fix it. Do not auto-refresh; let the error propagate.
 
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError:
-        logger.error("get_conversation failed", extra={"status_code": response.status_code})
+        if response.status_code in (401, 403):
+            logger.error(
+                "get_conversation auth failed — DIVAR_API_KEY is invalid or missing required scope. "
+                "This endpoint uses X-Api-Key, NOT OAuth. Check DIVAR_API_KEY in .env",
+                extra={"status_code": response.status_code, "response_body": response.text}
+            )
+        else:
+            logger.error("get_conversation failed", extra={
+                "status_code": response.status_code, "response_body": response.text
+            })
         raise
 
     logger.info("get_conversation succeeded", extra={"status_code": response.status_code})
