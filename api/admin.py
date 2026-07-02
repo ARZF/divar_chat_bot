@@ -28,7 +28,13 @@ async def upload_prices(
 
     contents = await file.read()
     df = pd.read_excel(io.BytesIO(contents))
-    price_lookup.load_prices_from_df(df)
+    try:
+        price_lookup.load_prices_from_df(df)
+    except KeyError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file format. Missing required column: {e}",
+        ) from e
 
     return UploadPricesResponse(
         status="ok",
