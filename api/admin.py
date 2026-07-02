@@ -14,17 +14,17 @@ async def upload_prices(
     file: UploadFile = File(...),
     credentials: HTTPAuthorizationCredentials = Depends(bearer),
 ):
-    if not file.filename or not file.filename.lower().endswith(".xlsx"):
-        raise HTTPException(
-            status_code=400,
-            detail="Only .xlsx files are accepted",
-        )
-
     if not hmac.compare_digest(
         credentials.credentials,
         settings.admin_token,
     ):
         raise HTTPException(401, "Unauthorized")
+
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only .xlsx files are accepted",
+        )
 
     contents = await file.read()
     df = pd.read_excel(io.BytesIO(contents))
