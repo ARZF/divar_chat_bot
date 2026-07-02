@@ -2,11 +2,11 @@ import logging
 import secrets
 from urllib.parse import urlencode
 
-import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from config import settings
+import services.divar as divar_service
 
 logger = logging.getLogger("oauth")
 
@@ -75,8 +75,7 @@ async def oauth_callback(request: Request):
         "redirect_uri": settings.DIVAR_REDIRECT_URI,
     }
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        response = await client.post(token_url, data=payload)
+    response = await divar_service.client.post(token_url, data=payload)
 
     response_json = response.json()
     logger.info(
