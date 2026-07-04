@@ -9,10 +9,19 @@ client: httpx.AsyncClient = None  # Set at startup via lifespan in main.py
 BASE_URL = "https://open-api.divar.ir"
 
 
-def _headers() -> dict:
+def _api_key_headers() -> dict:
+    """For endpoints that authenticate via X-Api-Key only (send_message, get_conversation)."""
     return {
         "X-API-Key": settings.DIVAR_API_KEY,
-        "Authorization": f"Bearer {settings.DIVAR_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+def _oauth_headers(access_token: str) -> dict:
+    """For endpoints that need both X-Api-Key and OAuth Bearer token (e.g. get_user)."""
+    return {
+        "X-API-Key": settings.DIVAR_API_KEY,
+        "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
@@ -39,7 +48,7 @@ async def send_message(conversation_id: str, text: str) -> bool:
     url = f"{BASE_URL}/v1/open-platform/chat/bot/conversations/{conversation_id}/messages"
     payload = {"type": "TEXT", "text_message": text}
 
-    response = await client.post(url, headers=_headers(), json=payload)
+    response = await client.post(url, headers=_api_key_headers(), json=payload)
 
     # NOTE: This endpoint authenticates via X-Api-Key, not OAuth.
     # A 401/403 here means the API key is invalid — refreshing an OAuth
@@ -67,7 +76,7 @@ async def send_message(conversation_id: str, text: str) -> bool:
 
 async def get_conversation(conversation_id: str) -> dict:
     url = f"{BASE_URL}/v1/open-platform/chat/conversations/{conversation_id}"
-    response = await client.get(url, headers=_headers())
+    response = await client.get(url, headers=_api_key_headers())
 
     # NOTE: This endpoint authenticates via X-Api-Key, not OAuth.
     # A 401/403 here means the API key is invalid — refreshing an OAuth
