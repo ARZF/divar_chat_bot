@@ -4,20 +4,18 @@ from fastapi.responses import JSONResponse
 from schemas.webhook import WebhookSchema
 from config import settings
 from services.chatbot import handle_bot_reply
-from logging_config import client_id_var, conversation_id_var
+from logging_config import conversation_id_var
 import logging
 
 router = APIRouter()
 logger = logging.getLogger("webhook")
 
-@router.post("/api/v1/webhook/{client_id}")
+@router.post("/api/v1/webhook")
 async def webhook(
-    client_id: str,
     payload: WebhookSchema,
     background_tasks: BackgroundTasks,
     authorization: str = Header(None),
 ):
-    client_id_var.set(client_id)
     # 1. Security Gate
     if not authorization or not hmac.compare_digest(
         authorization, settings.DIVAR_IDENTIFICATION_KEY
@@ -41,6 +39,6 @@ async def webhook(
     logger.info("incoming message", extra={"text": user_text})
     
     # 4. Hand off to the Chatbot Service asynchronously
-    background_tasks.add_task(handle_bot_reply, client_id, conversation_id, user_text)
+    background_tasks.add_task(handle_bot_reply, conversation_id, user_text)
 
     return JSONResponse(status_code=200, content={"status": "ok"})

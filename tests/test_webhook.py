@@ -62,7 +62,7 @@ def test_valid_auth_and_payload_schedules_background_task(client, mocker):
     )
 
     response = client.post(
-        "/api/v1/webhook/my_client_id",
+        "/api/v1/webhook",
         json=_valid_payload(text="قیمت iphone 13", conversation_id="conv_123"),
         headers={"Authorization": WEBHOOK_SECRET},
     )
@@ -70,9 +70,7 @@ def test_valid_auth_and_payload_schedules_background_task(client, mocker):
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
 
-    mock_handle.assert_called_once_with(
-        "my_client_id", "conv_123", "قیمت iphone 13"
-    )
+    mock_handle.assert_called_once_with("conv_123", "قیمت iphone 13")
 
 
 def test_missing_authorization_header_rejected_401(client, mocker):
@@ -81,7 +79,7 @@ def test_missing_authorization_header_rejected_401(client, mocker):
     )
 
     response = client.post(
-        "/api/v1/webhook/my_client_id",
+        "/api/v1/webhook",
         json=_valid_payload(),
     )
 
@@ -96,7 +94,7 @@ def test_incorrect_authorization_header_rejected_401(client, mocker):
     )
 
     response = client.post(
-        "/api/v1/webhook/my_client_id",
+        "/api/v1/webhook",
         json=_valid_payload(),
         headers={"Authorization": "wrong_secret"},
     )
@@ -117,7 +115,7 @@ def test_malformed_body_missing_required_fields_returns_422(client, mocker):
     )
 
     response = client.post(
-        "/api/v1/webhook/my_client_id",
+        "/api/v1/webhook",
         json={
             "type": "NEW_CHATBOT_MESSAGE",
             "new_chatbot_message": {
@@ -138,7 +136,7 @@ def test_ignored_when_new_chatbot_message_is_none(client, mocker):
     )
 
     response = client.post(
-        "/api/v1/webhook/my_client_id",
+        "/api/v1/webhook",
         json={"type": "NEW_CHATBOT_MESSAGE", "new_chatbot_message": None},
         headers={"Authorization": WEBHOOK_SECRET},
     )
@@ -146,32 +144,6 @@ def test_ignored_when_new_chatbot_message_is_none(client, mocker):
     assert response.status_code == 200
     assert response.json() == {"status": "ignored"}
     mock_handle.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# client_id pass-through
-# ---------------------------------------------------------------------------
-
-
-def test_client_id_path_param_passed_through_unchanged(client, mocker):
-    """Phase 1: client_id is accepted but unused for any lookup — only passed through."""
-    mock_handle = mocker.patch(
-        "api.webhook.handle_bot_reply", new_callable=AsyncMock
-    )
-
-    response = client.post(
-        "/api/v1/webhook/seller_xyz_789",
-        json=_valid_payload(text="hello", conversation_id="conv_456"),
-        headers={"Authorization": WEBHOOK_SECRET},
-    )
-
-    assert response.status_code == 200
-    # The first positional arg to handle_bot_reply should be the exact client_id
-    # from the URL path, unmodified
-    call_args = mock_handle.call_args
-    assert call_args.args[0] == "seller_xyz_789"
-    assert call_args.args[1] == "conv_456"
-    assert call_args.args[2] == "hello"
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +189,7 @@ def test_realistic_divar_webhook_payload(client, mocker):
     }
 
     response = client.post(
-        "/api/v1/webhook/client_001",
+        "/api/v1/webhook",
         json=payload,
         headers={"Authorization": WEBHOOK_SECRET},
     )
@@ -226,7 +198,6 @@ def test_realistic_divar_webhook_payload(client, mocker):
     assert response.json() == {"status": "ok"}
 
     mock_handle.assert_called_once_with(
-        "client_001",
         "62c82c02-6a71-4501-a1fd-4bf226b3aa78",
         "hello world",
     )
