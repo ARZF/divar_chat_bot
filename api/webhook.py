@@ -33,7 +33,7 @@ async def webhook(
     conversation_id_var.set(conversation_id)
 
     if not user_text:
-        logger.info("message with no text content — ignoring")
+        logger.debug("message with no text content — ignoring")
         return JSONResponse(status_code=200, content={"status": "ignored"})
 
     logger.info("incoming message", extra={"text": user_text})

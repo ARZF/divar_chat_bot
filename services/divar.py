@@ -70,7 +70,7 @@ async def send_message(conversation_id: str, text: str) -> bool:
             })
         raise
 
-    logger.info("send_message succeeded", extra={"status_code": response.status_code})
+    logger.debug("send_message succeeded", extra={"status_code": response.status_code})
     return True
 
 
@@ -97,5 +97,5 @@ async def get_conversation(conversation_id: str) -> dict:
             })
         raise
 
-    logger.info("get_conversation succeeded", extra={"status_code": response.status_code})
+    logger.debug("get_conversation succeeded", extra={"status_code": response.status_code})
     return response.json()

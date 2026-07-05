@@ -37,7 +37,7 @@ async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
     response back via Divar service.
     """
     conversation_id_var.set(conversation_id)
-    logger.info("processing message", extra={"text": user_text})
+    logger.debug("processing message", extra={"text": user_text})
 
     is_new = conversation_id not in seen_conversations
     
@@ -105,7 +105,7 @@ async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
         reply = settings.SUPPORT_MESSAGE
     elif _is_pure_greeting(normalized_text):
         if is_new:
-            logger.info("greeting suppressed — welcome already sent")
+            logger.debug("greeting suppressed — welcome already sent")
             return
         reply = settings.GREETING_REPLY_MESSAGE
         await divar_service.send_message(conversation_id, reply)
