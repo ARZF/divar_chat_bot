@@ -126,7 +126,6 @@ async def test_send_message_401_logs_api_key_error(httpx_mock, caplog):
         await divar.send_message("conv_123", "Hello")
 
     assert any("DIVAR_API_KEY" in record.message for record in caplog.records)
-    assert any("X-Api-Key" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +196,6 @@ async def test_get_conversation_401_logs_api_key_error(httpx_mock, caplog):
         await divar.get_conversation("conv_123")
 
     assert any("DIVAR_API_KEY" in record.message for record in caplog.records)
-    assert any("X-Api-Key" in record.message for record in caplog.records)
 
 
 # ---------------------------------------------------------------------------

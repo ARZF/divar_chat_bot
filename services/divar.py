@@ -60,7 +60,7 @@ async def send_message(conversation_id: str, text: str) -> bool:
         if response.status_code in (401, 403):
             logger.error(
                 "send_message auth failed — DIVAR_API_KEY is invalid or missing required scope. "
-                "This endpoint uses X-Api-Key, NOT OAuth. Check DIVAR_API_KEY in .env",
+                "Check DIVAR_API_KEY in .env",
                 extra={"status_code": response.status_code, "response_body": response.text}
             )
         else:
@@ -88,7 +88,7 @@ async def get_conversation(conversation_id: str) -> dict:
         if response.status_code in (401, 403):
             logger.error(
                 "get_conversation auth failed — DIVAR_API_KEY is invalid or missing required scope. "
-                "This endpoint uses X-Api-Key, NOT OAuth. Check DIVAR_API_KEY in .env",
+                "Check DIVAR_API_KEY in .env",
                 extra={"status_code": response.status_code, "response_body": response.text}
             )
         else:
