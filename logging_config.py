@@ -76,7 +76,7 @@ class JSONFormatter(logging.Formatter):
         }
 
 
-def setup_logging(level: int = logging.INFO) -> None:
+def setup_logging(level: int = logging.DEBUG) -> None:
     handler = logging.StreamHandler()
     handler.setFormatter(JSONFormatter())
     handler.addFilter(ContextFilter())

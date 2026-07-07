@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     DIVAR_CLIENT_SECRET: str
     DIVAR_REDIRECT_URI: str
     admin_token: str
+    DATABASE_URL: str
 
     # --- 🚀 New Chatbot Configuration Constants ---
     SUGGESTION_MIN_SCORE: float = 45.0
@@ -23,6 +24,7 @@ class Settings(BaseSettings):
     WARRANTY_MESSAGE: str = "محصولات ما دارای گارانتی ۱۲ ماهه هستند."
     SUPPORT_MESSAGE: str = "تیم پشتیبانی ما در ساعات کاری ۹ تا ۱۸ پاسخگوی شما هستند."
     FALLBACK_MESSAGE: str = "پیام شما دریافت شد. برای راهنمایی بیشتر با پشتیبانی تماس بگیرید."
+    UNRESOLVED_CLIENT_MESSAGE: str = "متأسفانه امکان پاسخگویی از طریق این مکالمه وجود ندارد. لطفاً از طریق صفحه آگهی وارد چت شوید."
     GREETING_REPLY_MESSAGE: str = "بفرمایید! چطور می‌توانم کمک کنم؟"
     GREETING_TOKENS: FrozenSet[str] = frozenset([
         "سلام", "درود", "سلامت", "هلو", "hi", "hello", "hey"

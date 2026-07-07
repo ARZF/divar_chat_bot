@@ -5,33 +5,29 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: divar
+      POSTGRES_PASSWORD: divar
+      POSTGRES_DB: divar
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U divar"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
 # --- Future services (uncomment when ready) ---
-#
-#   environment:
-#     - DATABASE_URL=postgresql+asyncpg://divar:divar@db:5432/divar
-#     - REDIS_URL=redis://redis:6379/0
-#   depends_on:
-#     db:
-#       condition: service_healthy
-#     redis:
-#       condition: service_healthy
-#
-# db:
-#   image: postgres:17-alpine
-#   environment:
-#     POSTGRES_USER: divar
-#     POSTGRES_PASSWORD: divar
-#     POSTGRES_DB: divar
-#   volumes:
-#     - pgdata:/var/lib/postgresql/data
-#   healthcheck:
-#     test: ["CMD-SHELL", "pg_isready -U divar"]
-#     interval: 5s
-#     timeout: 5s
-#     retries: 5
-#   restart: unless-stopped
 #
 # redis:
 #   image: redis:7-alpine
@@ -43,7 +39,7 @@ services:
 #     timeout: 5s
 #     retries: 5
 #   restart: unless-stopped
-#
-# volumes:
-#   pgdata:
+
+volumes:
+  pgdata:
 #   redisdata:

@@ -1,19 +1,25 @@
 import logging
-import pandas as pd
 from typing import Optional, Tuple
+
+import pandas as pd
 from rapidfuzz import fuzz, process
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from models.product import Product
 
 logger = logging.getLogger("price_lookup")
-# normalized_name -> price
-_prices: dict[str, int] = {}
-# normalized_name -> original/canonical name as written in the source file
-# (this is what gets shown to the user; _prices keys are normalized text
-# and are NOT fit for display — lowercased, synonym-collapsed, ZWNJ-stripped)
-_canonical_names: dict[str, str] = {}
-# list of normalized names, kept in sync with _prices (used for fuzzy search)
-_product_names: list[str] = []
-# Map inconsistent Persian/Arabic characters to one canonical form.
-# Extend this as you notice more variants in your real data.
+
+# ---------------------------------------------------------------------------
+# Per-client in-memory caches (rebuilt from DB via refresh_lookup_cache)
+# ---------------------------------------------------------------------------
+_prices: dict[int, dict[str, int]] = {}            # client_id -> {normalized_name: price}
+_canonical_names: dict[int, dict[str, str]] = {}    # client_id -> {normalized_name: item_name}
+_product_names: dict[int, list[str]] = {}           # client_id -> [normalized_name, ...]
+
+# ---------------------------------------------------------------------------
+# Character / synonym maps (unchanged from Phase 1)
+# ---------------------------------------------------------------------------
 _CHAR_MAP = {
     "ي": "ی",   # Arabic yeh -> Persian yeh
     "ك": "ک",   # Arabic kaf -> Persian kaf
@@ -22,48 +28,25 @@ _CHAR_MAP = {
     "\u200f": "",   # RTL mark -> drop
     "آ": "ا",
 }
-# Persian/Arabic digits -> normal digits, in case product names/queries contain numbers.
-# Covers both Persian (۰-۹) and Arabic-Indic (٠-٩) digit blocks — they look similar
-# but are different Unicode code points, and Arabic-Indic digits show up often in
-# text copy-pasted from phone keyboards set to Arabic locale.
 _DIGIT_MAP = {
     "۰": "0", "۱": "1", "۲": "2", "۳": "3", "۴": "4",
     "۵": "5", "۶": "6", "۷": "7", "۸": "8", "۹": "9",
     "٠": "0", "١": "1", "٢": "2", "٣": "3", "٤": "4",
     "٥": "5", "٦": "6", "٧": "7", "٨": "8", "٩": "9",
 }
-# Multi-word phrases customers use interchangeably with a catalog term.
-# Applied as a plain string replace BEFORE tokenizing (order matters: longer
-# phrases first so e.g. "تلفن همراه" is caught before lone "تلفن").
 _PHRASE_SYNONYMS = [
     ("تلفن همراه", "گوشی"),
     ("نوت بوک", "لپتاپ"),
     ("نوتبوک", "لپتاپ"),
     ("لپ تاپ", "لپتاپ"),
-    # Multi-token brand transliterations MUST go here, not in _WORD_SYNONYMS:
-    # _WORD_SYNONYMS is applied per single token after splitting, so a
-    # two-word Persian spelling like "مک بوک" would never match there —
-    # it'd be checked as "مک" and "بوک" separately and neither equals the
-    # dict key "مک بوک". Phrase replace runs first, on the raw string.
     ("مک بوک", "macbook"),
     ("ال جی", "lg"),
     ("اچ پی", "hp"),
 ]
-# Single-word synonyms, applied per-token AFTER tokenizing.
-_WORD_SYNONYMS = {
+_WORD_SYNONYMS: dict[str, str] = {
     "موبایل": "گوشی",
     "تلفن": "گوشی",
 }
-# Brand-name transliterations: maps the common Persian spelling of a brand to
-# its Latin spelling, so a Persian-typed query matches a catalog that stores
-# brand names in Latin script (very common — sellers often write "Samsung",
-# "Asus", "iPhone" in their Excel files even though customers type in Persian).
-# rapidfuzz scores character similarity, so "سامسونگ" vs "samsung" looks like
-# two unrelated strings to it even at 100% normalization elsewhere — this map
-# is the only thing that bridges that gap. It is NOT exhaustive; extend it as
-# new brands show up in real conversations or catalogs.
-# NOTE: this is merged into _WORD_SYNONYMS at import time (see below), so it's
-# applied as part of the same per-token pass — no separate pipeline step.
 _BRAND_TRANSLITERATIONS = {
     "سامسونگ": "samsung",
     "اپل": "apple",
@@ -77,11 +60,13 @@ _BRAND_TRANSLITERATIONS = {
     "سونی": "sony",
     "دل": "dell",
     "گلکسی": "galaxy",
-    # NOTE: "مک بوک", "ال جی", "اچ پی" are NOT here — they're two tokens each
-    # after split() and belong in _PHRASE_SYNONYMS above instead, where the
-    # replace runs on the raw string before tokenizing.
 }
 _WORD_SYNONYMS.update(_BRAND_TRANSLITERATIONS)
+
+
+# ---------------------------------------------------------------------------
+# Text normalization (pure function, no DB or client_id dependency)
+# ---------------------------------------------------------------------------
 def normalize_text(text: str) -> str:
     """Make Persian text comparable: unify character variants, fix spacing,
     apply synonym mapping, lowercase."""
@@ -90,125 +75,171 @@ def normalize_text(text: str) -> str:
         text = text.replace(src, dst)
     for phrase, canonical in _PHRASE_SYNONYMS:
         text = text.replace(phrase, canonical)
-    # ZWNJ -> space above can produce doubled/irregular whitespace (e.g. from
-    # "می‌خوام" or copy-pasted chat text with stray spaces); collapse it via
-    # split()/join() rather than a second strip(), which only trims the ends.
     tokens = text.split()
     tokens = [_WORD_SYNONYMS.get(tok, tok) for tok in tokens]
     return " ".join(tokens)
+
+
+# ---------------------------------------------------------------------------
+# DataFrame parser (pure function, unchanged from Phase 1)
+# ---------------------------------------------------------------------------
 def _parse_df(df: pd.DataFrame) -> Tuple[dict[str, int], dict[str, str]]:
     """Returns (prices, canonical_names), both keyed by normalized_name.
-    
+
     Safely skips rows with missing prices (NaN) or headers treated as data.
     """
     prices: dict[str, int] = {}
     canonical_names: dict[str, str] = {}
-    
+
     for _, row in df.iterrows():
-        # 1. Clean the price value and check for NaN (blank cells)
         raw_price = row["price"]
         if pd.isna(raw_price):
-            continue  # Silently skip empty rows/cells
-            
-        # 2. Convert to string to clean up any spaces or float trailing decimals
+            continue
+
         price_str = str(raw_price).strip()
-        
-        # If your excel has floats like "15000.0", remove the decimal trailing zero
         if price_str.endswith('.0'):
             price_str = price_str[:-2]
-            
-        # 3. Check if the value is actually a valid number
+
         if not price_str.isdigit():
-            # This catches things like 'قیمت(تومان)', text headers, or messy data
-            logger.warning("Skipping invalid non-numeric price row", extra={"raw_price": price_str})
+            logger.warning(
+                "Skipping invalid non-numeric price row",
+                extra={"raw_price": price_str},
+            )
             continue
-            
-        # 4. Safe to parse now
+
         raw_name = str(row["product"])
         key = normalize_text(raw_name)
-        
+
         prices[key] = int(price_str)
         canonical_names[key] = raw_name.strip()
-        
+
     return prices, canonical_names
-def load_prices(filepath: str) -> dict[str, int]:
-    global _prices, _product_names, _canonical_names
-    df = pd.read_excel(filepath)
-    _prices, _canonical_names = _parse_df(df)
-    _product_names = list(_prices.keys())
-    return _prices
-def load_prices_from_df(df: pd.DataFrame) -> dict[str, int]:
-    global _prices, _product_names, _canonical_names
-    _prices, _canonical_names = _parse_df(df)
-    _product_names = list(_prices.keys())
-    return _prices
-def find_best_match(item_name: str, threshold: float = 70.0) -> Optional[Tuple[str, float]]:
+
+
+# ---------------------------------------------------------------------------
+# DB-backed cache management
+# ---------------------------------------------------------------------------
+async def refresh_lookup_cache(db: AsyncSession, client_id: int) -> None:
+    """Rebuild the in-memory fuzzy-search cache for *one* client from the
+    ``products`` table. Call on app startup (per known client) and after every
+    admin upload for the affected client."""
+    stmt = select(Product).where(Product.client_id == client_id)
+    result = await db.execute(stmt)
+    products = result.scalars().all()
+
+    prices: dict[str, int] = {}
+    canonical: dict[str, str] = {}
+    for p in products:
+        prices[p.normalized_name] = p.price
+        canonical[p.normalized_name] = p.item_name
+
+    _prices[client_id] = prices
+    _canonical_names[client_id] = canonical
+    _product_names[client_id] = list(prices.keys())
+
+
+async def load_prices_to_db(
+    db: AsyncSession, client_id: int, df: pd.DataFrame
+) -> int:
+    """Transactional replace: delete all products for *client_id*, insert new
+    rows parsed from *df*, commit, then refresh the in-memory cache.
+
+    Returns the number of rows inserted.
     """
-    Returns (matched_normalized_name, score) or None.
-    score is 0-100; 100 means exact match after normalization.
-    """
+    parsed_prices, parsed_canonical = _parse_df(df)
+
+    # Scoped delete — only this client's products
+    await db.execute(
+        delete(Product).where(Product.client_id == client_id)
+    )
+
+    # Scoped insert — tagged with this client_id
+    for normalized_name, price in parsed_prices.items():
+        item_name = parsed_canonical.get(normalized_name, normalized_name)
+        db.add(Product(
+            client_id=client_id,
+            item_name=item_name,
+            normalized_name=normalized_name,
+            price=price,
+        ))
+
+    await db.commit()
+    await refresh_lookup_cache(db, client_id)
+
+    return len(parsed_prices)
+
+
+# ---------------------------------------------------------------------------
+# Lookup functions — all client_id-scoped
+# ---------------------------------------------------------------------------
+def find_best_match(
+    client_id: int, item_name: str, threshold: float = 70.0
+) -> Optional[Tuple[str, float]]:
+    """Returns (matched_normalized_name, score) or None.
+    score is 0-100; 100 means exact match after normalization."""
+    prices = _prices.get(client_id, {})
+    names = _product_names.get(client_id, [])
     query = normalize_text(item_name)
-    if not query or not _prices:
+    if not query or not prices:
         return None
-    if query in _prices:
+    if query in prices:
         return query, 100.0
-    result = process.extractOne(query, _product_names, scorer=fuzz.WRatio)
+    result = process.extractOne(query, names, scorer=fuzz.WRatio)
     if result is None:
         return None
     matched_name, score, _ = result
     if score >= threshold:
         return matched_name, score
     return None
-def find_top_matches(item_name: str, limit: int = 3) -> list[Tuple[str, float]]:
-    """
-    Returns up to `limit` (normalized_name, score) candidates, best first,
-    with no threshold filtering. Used when the top match alone isn't confident
-    enough to answer outright but a "did you mean X or Y?" reply is still useful.
-    Returns an empty list if there's no catalog loaded or no input.
-    """
+
+
+def find_top_matches(
+    client_id: int, item_name: str, limit: int = 3
+) -> list[Tuple[str, float]]:
+    """Returns up to *limit* (normalized_name, score) candidates, best first."""
+    prices = _prices.get(client_id, {})
+    names = _product_names.get(client_id, [])
     query = normalize_text(item_name)
-    if not query or not _prices:
+    if not query or not prices:
         return []
-    results = process.extract(query, _product_names, scorer=fuzz.WRatio, limit=limit)
+    results = process.extract(query, names, scorer=fuzz.WRatio, limit=limit)
     return [(name, score) for name, score, _ in results]
 
-def get_all_matching_prices(item_name: str) -> list[Tuple[str, int]]:
-    """
-    Finds all products whose normalized names contain the normalized user query.
-    Returns a list of tuples: [(canonical_product_name, price), ...]
-    """
+
+def get_all_matching_prices(
+    client_id: int, item_name: str
+) -> list[Tuple[str, int]]:
+    """Substring matches: all products whose normalized name contains *query*.
+    Returns [(canonical_product_name, price), ...]."""
+    prices = _prices.get(client_id, {})
+    canonical = _canonical_names.get(client_id, {})
     query = normalize_text(item_name)
-    
-    # If the user input is empty or the catalog isn't loaded, return an empty list
-    if not query or not _prices:
+
+    if not query or not prices:
         return []
-        
+
     matches = []
-    
-    # Look through every item in your loaded price dictionary
-    for normalized_key, price in _prices.items():
-        # Check if the user's query is part of the product name string
+    for normalized_key, price in prices.items():
         if query in normalized_key:
-            # Fetch the clean display name (canonical name) for the user
-            canonical_name = _canonical_names.get(normalized_key, normalized_key)
+            canonical_name = canonical.get(normalized_key, normalized_key)
             matches.append((canonical_name, price))
-            
     return matches
 
-def get_price(item_name: str, threshold: float = 70.0) -> Optional[Tuple[str, int]]:
-    """
-    Returns a tuple of (canonical_product_name, price) if found, else None.
-    canonical_product_name is the original text as written in the source file
-    (not the normalized matching key) — this is what's safe to show the user.
-    """
-    match = find_best_match(item_name, threshold)
+
+def get_price(
+    client_id: int, item_name: str, threshold: float = 70.0
+) -> Optional[Tuple[str, int]]:
+    """Returns (canonical_product_name, price) if found, else None."""
+    match = find_best_match(client_id, item_name, threshold)
     if match is None:
         return None
     matched_key, _score = match
 
-    price = _prices.get(matched_key)
+    prices = _prices.get(client_id, {})
+    canonical = _canonical_names.get(client_id, {})
+    price = prices.get(matched_key)
     if price is None:
         return None
 
-    canonical_name = _canonical_names.get(matched_key, matched_key)
+    canonical_name = canonical.get(matched_key, matched_key)
     return canonical_name, price
