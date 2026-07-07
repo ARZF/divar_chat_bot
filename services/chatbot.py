@@ -38,7 +38,12 @@ def parse_start_message(text: str) -> Optional[Tuple[str, Optional[str]]]:
     Handles all five documented touchpoint names and does not assume a token
     is present (bare ``/start MY_DIVAR`` is valid).
     """
-    if not text or not text.startswith("/start "):
+    if not text:
+        return None
+
+    text = text.strip()
+
+    if not text.startswith("/start "):
         return None
 
     parts = text.split(maxsplit=2)
@@ -84,17 +89,46 @@ async def _resolve_new_conversation(
     parsed = parse_start_message(user_text)
 
     logger.warning(
-        "parsed start message",
+        "RESOLVE DEBUG",
         extra={
-            "user_text": user_text,
+            "user_text": repr(user_text),
             "parsed": parsed,
             "experimental_client": settings.EXPERIMENTAL_CLIENT_ID,
         },
     )
 
     if parsed is None:
-        return None
+        if settings.EXPERIMENTAL_CLIENT_ID is not None:
+            client_id = settings.EXPERIMENTAL_CLIENT_ID
 
+            insert_stmt = (
+                pg_insert(Conversation)
+                .values(
+                    client_id=client_id,
+                    divar_conversation_id=divar_conversation_id,
+                    current_state="START",
+                )
+                .on_conflict_do_nothing(
+                    constraint="uq_conversations_client_divar"
+                )
+            )
+
+            await db.execute(insert_stmt)
+            await db.commit()
+
+            logger.warning(
+                "Using experimental fallback without /start",
+                extra={
+                    "conversation_id": divar_conversation_id,
+                    "client_id": client_id,
+                    "user_text": user_text,
+                },
+            )
+
+            return client_id
+
+        return None
+    
     touchpoint, token = parsed
 
     if touchpoint in ("MY_POST", "DEMAND_POST") and token:
@@ -123,49 +157,6 @@ async def _resolve_new_conversation(
         await db.execute(insert_stmt)
         await db.commit()
         return resolved_client_id
-
-    # ------------------------------------------------------------------
-    # Experimental fallback for chatbot testing.
-    #
-    # In production, MY_DIVAR / DIVAR_PRO / CHAT conversations cannot be
-    # resolved because they carry no post_token.
-    #
-    # During development we allow routing unresolved conversations to a
-    # fixed test client configured in settings.
-    #
-    # IMPORTANT:
-    # We also persist the conversation here so subsequent messages in the
-    # same Divar conversation_id can resolve directly from the database,
-    # matching the production flow.
-    # ------------------------------------------------------------------
-    if settings.EXPERIMENTAL_CLIENT_ID is not None:
-        client_id = settings.EXPERIMENTAL_CLIENT_ID
-
-        insert_stmt = (
-            pg_insert(Conversation)
-            .values(
-                client_id=client_id,
-                divar_conversation_id=divar_conversation_id,
-                current_state="START",
-            )
-            .on_conflict_do_nothing(
-                constraint="uq_conversations_client_divar"
-            )
-        )
-
-        await db.execute(insert_stmt)
-        await db.commit()
-
-        logger.warning(
-            "Using experimental client fallback",
-            extra={
-                "conversation_id": divar_conversation_id,
-                "client_id": client_id,
-                "touchpoint": touchpoint,
-            },
-        )
-
-        return client_id
 
     return None
 
