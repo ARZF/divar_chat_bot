@@ -121,19 +121,42 @@ async def _resolve_new_conversation(
     # In production, MY_DIVAR / DIVAR_PRO / CHAT conversations cannot be
     # resolved because they carry no post_token.
     #
-    # During development we allow routing all unresolved conversations to
-    # a fixed client configured in settings.
+    # During development we allow routing unresolved conversations to a
+    # fixed test client configured in settings.
+    #
+    # IMPORTANT:
+    # We also persist the conversation here so subsequent messages in the
+    # same Divar conversation_id can resolve directly from the database,
+    # matching the production flow.
     # ------------------------------------------------------------------
     if settings.EXPERIMENTAL_CLIENT_ID is not None:
+        client_id = settings.EXPERIMENTAL_CLIENT_ID
+
+        insert_stmt = (
+            pg_insert(Conversation)
+            .values(
+                client_id=client_id,
+                divar_conversation_id=divar_conversation_id,
+                current_state="START",
+            )
+            .on_conflict_do_nothing(
+                constraint="uq_conversations_client_divar"
+            )
+        )
+
+        await db.execute(insert_stmt)
+        await db.commit()
+
         logger.warning(
             "Using experimental client fallback",
             extra={
                 "conversation_id": divar_conversation_id,
+                "client_id": client_id,
                 "touchpoint": touchpoint,
             },
         )
 
-        return settings.EXPERIMENTAL_CLIENT_ID
+        return client_id
 
     return None
 
