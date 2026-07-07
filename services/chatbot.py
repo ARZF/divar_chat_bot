@@ -115,7 +115,26 @@ async def _resolve_new_conversation(
         await db.commit()
         return resolved_client_id
 
-    # MY_DIVAR, DIVAR_PRO, CHAT, or MY_POST/DEMAND_POST without token
+    # ------------------------------------------------------------------
+    # Experimental fallback for chatbot testing.
+    #
+    # In production, MY_DIVAR / DIVAR_PRO / CHAT conversations cannot be
+    # resolved because they carry no post_token.
+    #
+    # During development we allow routing all unresolved conversations to
+    # a fixed client configured in settings.
+    # ------------------------------------------------------------------
+    if settings.EXPERIMENTAL_CLIENT_ID is not None:
+        logger.warning(
+            "Using experimental client fallback",
+            extra={
+                "conversation_id": divar_conversation_id,
+                "touchpoint": touchpoint,
+            },
+        )
+
+        return settings.EXPERIMENTAL_CLIENT_ID
+
     return None
 
 
