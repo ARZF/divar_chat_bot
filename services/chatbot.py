@@ -82,8 +82,17 @@ async def _resolve_new_conversation(
     Returns ``None`` for unresolvable touchpoints or unknown post tokens.
     """
     parsed = parse_start_message(user_text)
+
+    logger.warning(
+        "parsed start message",
+        extra={
+            "user_text": user_text,
+            "parsed": parsed,
+            "experimental_client": settings.EXPERIMENTAL_CLIENT_ID,
+        },
+    )
+
     if parsed is None:
-        # Not a /start message — treat as unresolved
         return None
 
     touchpoint, token = parsed
