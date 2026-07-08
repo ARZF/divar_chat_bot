@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 class Post(Base):
     __tablename__ = "posts"
 
-    post_token: Mapped[str] = mapped_column(String(255), primary_key=True)
+    post_token: Mapped[str] = mapped_column(String(20), primary_key=True)
     client_id: Mapped[int] = mapped_column(
         ForeignKey("clients.id", ondelete="CASCADE"),
         index=True,
