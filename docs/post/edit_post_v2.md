@@ -1,0 +1,90 @@
+# ویرایش آگهی (نسخه ۲)
+
+| Edit Post V2   |                                                     |
+|----------------|-----------------------------------------------------|
+| OAUTH Scope | <code dir="ltr">POST_EDIT.&lt;post_token&gt;</code> |
+
+این اندپوینت نسخه پیشرفته‌تر API ویرایش آگهی است که با استفاده از **فیلد ماسک** (Field Mask) امکان ویرایش دقیق‌تر و کنترل شده‌تر فیلدهای آگهی را فراهم می‌کند.
+
+> 📚 **مستندات OpenAPI**: برای مشاهده مستندات کامل این API، به [صفحه OpenAPI](https://kenar.divar.dev/openapi-doc/post-edit-post-v-2) مراجعه کنید.
+
+## مزایای نسخه ۲
+
+- **ویرایش موقعیت و سایر ویژگی‌ها**: علاوه بر عنوان و توضیحات، امکان ویرایش موقعیت جغرافیایی، شهر، محله و سایر ویژگی‌های آگهی
+- **پشتیبانی از فیلدهای دسته‌بندی**: امکان ویرایش فیلدهای مخصوص هر دسته‌بندی
+- **ویرایش انتخابی**: با استفاده از `update_mask` می‌توانید دقیقاً مشخص کنید کدام فیلدها باید به‌روزرسانی شوند
+
+برای استفاده از این اندپوینت باید دسترسی <code dir="ltr">POST_EDIT.&lt;post_token&gt;</code> را در فرآیند احراز باز از کاربر دریافت کنید.
+<br />
+
+## درخواست
+
+```http request
+PUT https://open-api.divar.ir/v2/open-platform/post/<token>
+Authorization: Bearer {{access_token_with_oauth_scope_POST_EDIT.<post_token>}}
+x-api-key: {{apikey}}
+Content-Type: application/json
+
+{
+    "update_mask": [
+        "general_data.title",
+        "general_data.hide_phone",
+        "category_data.usage"
+    ],
+    "general_data": {
+        "title": "عنوان جدید آگهی",
+        "hide_phone": true
+    },
+    "category_data": {
+        "usage": 100000
+    }
+}
+```
+
+### فیلد ماسک (update_mask)
+
+فیلد `update_mask` یک آرایه از رشته‌ها است که مشخص می‌کند کدام فیلدها باید به‌روزرسانی شوند. استفاده از فیلد ماسک به شما امکان می‌دهد:
+
+1. **فقط فیلدهای مورد نظر را به‌روزرسانی کنید**: اگر فیلدی در `update_mask` نباشد، حتی اگر در بدنه درخواست ارسال شود، به‌روزرسانی نخواهد شد.
+
+2. **از مسیرهای تو در تو استفاده کنید**: 
+   - برای فیلدهای عمومی: `general_data.<field_name>`
+   - برای فیلدهای دسته‌بندی: `category_data.<field_name>`
+
+### ساختار general_data
+
+فیلدهای قابل ویرایش در `general_data`:
+
+| فیلد | نوع | توضیحات |
+|------|-----|---------|
+| `title` | string | عنوان آگهی |
+| `description` | string | توضیحات آگهی |
+| `images` | array[string] | آرایه مسیرهای تصاویر |
+| `district` | string | محله آگهی |
+| `latitude` | number | عرض جغرافیایی |
+| `longitude` | number | طول جغرافیایی |
+| `location_type` | string | نوع موقعیت |
+| `chat_enabled` | boolean | فعال بودن امکان چت |
+| `hide_phone` | boolean | عدم نمایش شماره تماس |
+
+### ساختار category_data
+
+فیلدهای `category_data` به دسته‌بندی آگهی بستگی دارند. برای مشاهده فیلدهای قابل ویرایش در هر دسته‌بندی، می‌توانید از [این API](https://kenar.divar.dev/openapi-doc/assets-get-submit-schema/) استفاده کنید.
+
+## پاسخ
+
+در صورت موفق بودن ویرایش آگهی، پاسخی خالی با کد 200 برگردانده میشود:
+
+```json
+{}
+```
+
+## نکات مهم
+
+1. **فیلد update_mask اجباری است**: این فیلد باید در تمام درخواست‌ها ارسال شود.
+
+2. **عدم ارسال فیلد در update_mask**: اگر فیلدی در `update_mask` نباشد، حتی اگر در بدنه درخواست ارسال شود، به‌روزرسانی نخواهد شد.
+
+3. **قالب فیلدهای دسته‌بندی**: فیلدهای `category_data` باید مطابق قالب دسته‌بندی آگهی باشند. برای دریافت قالب از [این API](https://kenar.divar.dev/openapi-doc/assets-get-submit-schema/) استفاده کنید.
+
+4. **آپلود تصاویر**: برای آپلود تصاویر جدید می‌توانید از [این اندپوینت](./get_image_upload_url.md) استفاده کنید.

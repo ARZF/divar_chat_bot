@@ -89,4 +89,3 @@ celerybeat.pid
 *.key
 
 plan.md
-docs/
