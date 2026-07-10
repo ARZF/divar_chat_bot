@@ -96,8 +96,8 @@ def _parse_df(df: pd.DataFrame) -> Tuple[dict[str, int], dict[str, str]]:
     prices: dict[str, int] = {}
     canonical_names: dict[str, str] = {}
 
-    for _, row in df.iterrows():
-        raw_price = row["price"]
+    for row in df.itertuples(index=False):
+        raw_price = row.price
         if pd.isna(raw_price):
             continue
 
@@ -112,7 +112,7 @@ def _parse_df(df: pd.DataFrame) -> Tuple[dict[str, int], dict[str, str]]:
             )
             continue
 
-        raw_name = str(row["product"])
+        raw_name = str(row.product)
         key = normalize_text(raw_name)
 
         prices[key] = int(price_str)
