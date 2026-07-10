@@ -49,25 +49,23 @@ CATALOG = {
 @pytest.fixture
 def catalog():
     """Populate per-client module-level state with CATALOG, clean up after."""
-    pl._prices[CID] = {k: v[1] for k, v in CATALOG.items()}
-    pl._canonical_names[CID] = {k: v[0] for k, v in CATALOG.items()}
-    pl._product_names[CID] = list(pl._prices[CID].keys())
+    prices = {k: v[1] for k, v in CATALOG.items()}
+    canonical = {k: v[0] for k, v in CATALOG.items()}
+    pl._cache[CID] = pl.ClientPriceCache(
+        prices=prices,
+        canonical_names=canonical,
+        product_names=list(prices.keys()),
+    )
     yield
-    pl._prices.pop(CID, None)
-    pl._canonical_names.pop(CID, None)
-    pl._product_names.pop(CID, None)
+    pl._cache.pop(CID, None)
 
 
 @pytest.fixture
 def empty_catalog():
     """Ensure per-client module-level state is empty."""
-    pl._prices.pop(CID, None)
-    pl._canonical_names.pop(CID, None)
-    pl._product_names.pop(CID, None)
+    pl._cache.pop(CID, None)
     yield
-    pl._prices.pop(CID, None)
-    pl._canonical_names.pop(CID, None)
-    pl._product_names.pop(CID, None)
+    pl._cache.pop(CID, None)
 
 
 def make_excel(rows, headers=("product", "price")):

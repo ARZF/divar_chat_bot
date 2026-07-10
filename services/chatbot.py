@@ -235,9 +235,9 @@ async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
         client_id_var.set(str(client_id))
 
         # ---- 3. Ensure price cache is loaded for this client ----
-        from services.price_lookup import _prices
+        from services.price_lookup import _cache
 
-        if client_id not in _prices:
+        if client_id not in _cache:
             await refresh_lookup_cache(db, client_id)
 
         # ---- 4. Welcome message on first-in-conversation ----

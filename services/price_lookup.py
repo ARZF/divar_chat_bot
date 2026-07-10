@@ -7,15 +7,20 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.product import Product
+from dataclasses import dataclass, field
 
 logger = logging.getLogger("price_lookup")
 
 # ---------------------------------------------------------------------------
 # Per-client in-memory caches (rebuilt from DB via refresh_lookup_cache)
 # ---------------------------------------------------------------------------
-_prices: dict[int, dict[str, int]] = {}            # client_id -> {normalized_name: price}
-_canonical_names: dict[int, dict[str, str]] = {}    # client_id -> {normalized_name: item_name}
-_product_names: dict[int, list[str]] = {}           # client_id -> [normalized_name, ...]
+@dataclass
+class ClientPriceCache:
+    prices: dict[str, int] = field(default_factory=dict)          # normalized_name -> price
+    canonical_names: dict[str, str] = field(default_factory=dict) # normalized_name -> item_name
+    product_names: list[str] = field(default_factory=list)        # [normalized_name, ...]
+
+_cache: dict[int, ClientPriceCache] = {}
 
 # ---------------------------------------------------------------------------
 # Character / synonym maps (unchanged from Phase 1)
@@ -133,9 +138,11 @@ async def refresh_lookup_cache(db: AsyncSession, client_id: int) -> None:
         prices[p.normalized_name] = p.price
         canonical[p.normalized_name] = p.item_name
 
-    _prices[client_id] = prices
-    _canonical_names[client_id] = canonical
-    _product_names[client_id] = list(prices.keys())
+    _cache[client_id] = ClientPriceCache(
+        prices=prices,
+        canonical_names=canonical,
+        product_names=list(prices.keys()),
+    )
 
 
 async def load_prices_to_db(
@@ -177,14 +184,13 @@ def find_best_match(
 ) -> Optional[Tuple[str, float]]:
     """Returns (matched_normalized_name, score) or None.
     score is 0-100; 100 means exact match after normalization."""
-    prices = _prices.get(client_id, {})
-    names = _product_names.get(client_id, [])
+    entry = _cache.get(client_id)
     query = normalize_text(item_name)
-    if not query or not prices:
+    if not query or not entry or not entry.prices:
         return None
-    if query in prices:
+    if query in entry.prices:
         return query, 100.0
-    result = process.extractOne(query, names, scorer=fuzz.WRatio)
+    result = process.extractOne(query, entry.product_names, scorer=fuzz.WRatio)
     if result is None:
         return None
     matched_name, score, _ = result
@@ -197,12 +203,11 @@ def find_top_matches(
     client_id: int, item_name: str, limit: int = 3
 ) -> list[Tuple[str, float]]:
     """Returns up to *limit* (normalized_name, score) candidates, best first."""
-    prices = _prices.get(client_id, {})
-    names = _product_names.get(client_id, [])
+    entry = _cache.get(client_id)
     query = normalize_text(item_name)
-    if not query or not prices:
+    if not query or not entry or not entry.prices:
         return []
-    results = process.extract(query, names, scorer=fuzz.WRatio, limit=limit)
+    results = process.extract(query, entry.product_names, scorer=fuzz.WRatio, limit=limit)
     return [(name, score) for name, score, _ in results]
 
 
@@ -211,17 +216,16 @@ def get_all_matching_prices(
 ) -> list[Tuple[str, int]]:
     """Substring matches: all products whose normalized name contains *query*.
     Returns [(canonical_product_name, price), ...]."""
-    prices = _prices.get(client_id, {})
-    canonical = _canonical_names.get(client_id, {})
+    entry = _cache.get(client_id)
     query = normalize_text(item_name)
 
-    if not query or not prices:
+    if not query or not entry or not entry.prices:
         return []
 
     matches = []
-    for normalized_key, price in prices.items():
+    for normalized_key, price in entry.prices.items():
         if query in normalized_key:
-            canonical_name = canonical.get(normalized_key, normalized_key)
+            canonical_name = entry.canonical_names.get(normalized_key, normalized_key)
             matches.append((canonical_name, price))
     return matches
 
@@ -235,11 +239,12 @@ def get_price(
         return None
     matched_key, _score = match
 
-    prices = _prices.get(client_id, {})
-    canonical = _canonical_names.get(client_id, {})
-    price = prices.get(matched_key)
+    entry = _cache.get(client_id)
+    if not entry:
+        return None
+    price = entry.prices.get(matched_key)
     if price is None:
         return None
 
-    canonical_name = canonical.get(matched_key, matched_key)
+    canonical_name = entry.canonical_names.get(matched_key, matched_key)
     return canonical_name, price
