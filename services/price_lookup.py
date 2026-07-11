@@ -166,14 +166,17 @@ async def load_prices_to_db(
     )
 
     # Scoped insert — tagged with this client_id
-    for normalized_name, price in parsed_prices.items():
-        item_name = parsed_canonical.get(normalized_name, normalized_name)
-        db.add(Product(
+    products = [
+        Product(
             client_id=client_id,
-            item_name=item_name,
+            item_name=parsed_canonical.get(normalized_name, normalized_name),
             normalized_name=normalized_name,
             price=price,
-        ))
+        )
+        for normalized_name, price in parsed_prices.items()
+    ]
+
+    db.add_all(products)
 
     await db.commit()
     await refresh_lookup_cache(db, client_id)
