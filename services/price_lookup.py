@@ -14,7 +14,7 @@ logger = logging.getLogger("price_lookup")
 # ---------------------------------------------------------------------------
 # Per-client in-memory caches (rebuilt from DB via refresh_lookup_cache)
 # ---------------------------------------------------------------------------
-@dataclass
+@dataclass(slots=True) #makes dataclass imumtable for memory efficiency
 class ClientPriceCache:
     prices: dict[str, int] = field(default_factory=dict)          # normalized_name -> price
     canonical_names: dict[str, str] = field(default_factory=dict) # normalized_name -> item_name
@@ -72,11 +72,16 @@ _WORD_SYNONYMS.update(_BRAND_TRANSLITERATIONS)
 # ---------------------------------------------------------------------------
 # Text normalization (pure function, no DB or client_id dependency)
 # ---------------------------------------------------------------------------
+_NORMALIZATION_MAP = {
+    **_CHAR_MAP,
+    **_DIGIT_MAP,
+}
+
 def normalize_text(text: str) -> str:
     """Make Persian text comparable: unify character variants, fix spacing,
     apply synonym mapping, lowercase."""
     text = str(text).strip().lower()
-    for src, dst in {**_CHAR_MAP, **_DIGIT_MAP}.items():
+    for src, dst in _NORMALIZATION_MAP.items():
         text = text.replace(src, dst)
     for phrase, canonical in _PHRASE_SYNONYMS:
         text = text.replace(phrase, canonical)
