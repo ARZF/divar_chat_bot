@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 import logging
 from typing import Optional, Tuple
 
@@ -7,14 +8,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.product import Product
-from dataclasses import dataclass, field
 
 logger = logging.getLogger("price_lookup")
 
 # ---------------------------------------------------------------------------
 # Per-client in-memory caches (rebuilt from DB via refresh_lookup_cache)
 # ---------------------------------------------------------------------------
-@dataclass(slots=True) #makes dataclass imumtable for memory efficiency
+@dataclass(slots=True) # reduces memory usage
 class ClientPriceCache:
     prices: dict[str, int] = field(default_factory=dict)          # normalized_name -> price
     canonical_names: dict[str, str] = field(default_factory=dict) # normalized_name -> item_name
