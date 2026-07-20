@@ -14,6 +14,20 @@ class Settings(BaseSettings):
     admin_token: str
     DATABASE_URL: str
     EXPERIMENTAL_CLIENT_ID: int | None = None
+
+    # --- 🔐 Seller Authentication (section 2.8) ---
+    JWT_SECRET_KEY: str                        # signing key for access JWTs — .env only, never logged
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_LIFETIME_MINUTES: int = 30
+    REFRESH_TOKEN_LIFETIME_DAYS: int = 30
+    OTP_LENGTH: int = 6
+    OTP_LIFETIME_MINUTES: int = 5
+    OTP_MAX_ATTEMPTS: int = 5
+    OTP_REQUEST_COOLDOWN_SECONDS: int = 120    # min interval between OTP requests for same phone
+    OTP_HMAC_KEY: str                          # secret key for HMAC-SHA256 OTP hashing — .env only
+    SMS_PROVIDER_API_KEY: str | None = None    # for the SMS provider (no provider chosen yet)
+    SMS_PROVIDER_URL: str | None = None        # SMS API endpoint (no provider chosen yet)
+
     
     # --- 🚀 New Chatbot Configuration Constants ---
     SUGGESTION_MIN_SCORE: float = 45.0
