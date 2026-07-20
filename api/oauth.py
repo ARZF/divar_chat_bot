@@ -34,7 +34,7 @@ async def oauth_dev_start():
         "response_type": "code",
         "client_id": settings.DIVAR_APP_SLUG,
         "redirect_uri": settings.DIVAR_REDIRECT_URI,
-        "scope": "offline_access",
+        "scope": "USER_PHONE USER_ID offline_access",
         "state": _pending_state,
     }
     auth_url = f"https://oauth.divar.ir/oauth2/auth?{urlencode(params)}"
