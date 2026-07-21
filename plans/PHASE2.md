@@ -443,13 +443,13 @@ States: `START → MAIN_MENU → PRICE_MENU | SERVICE_MENU | HUMAN_SUPPORT`
 
 **Tasks:**
 
-- [ ] `POST /admin/upload-prices` becomes tenant-scoped: resolve `client_id` via
+- [x] `POST /admin/upload-prices` becomes tenant-scoped: resolve `client_id` via
       `get_current_client_id`, then delete-and-replace that client's rows only
       (`WHERE client_id = :current_client_id`), insert the new rows tagged with that
       `client_id`, commit, then call `refresh_lookup_cache(db, client_id)` (2.4)
-- [ ] Remove the old global `admin_token` check from this endpoint once the auth dependency
+- [x] Remove the old global `admin_token` check from this endpoint once the auth dependency
       is in place. Do not run both schemes side by side past this section's completion.
-- [ ] `POST /seller/posts` — authenticated seller registers their post tokens:
+- [x] `POST /seller/posts` — authenticated seller registers their post tokens:
       - Requires `Authorization: Bearer <JWT>` → `get_current_client_id()`
       - Body: `{ "post_tokens": ["TOKEN1", "TOKEN2", ...] }`
       - For each token: `INSERT INTO posts (post_token, client_id) ... ON CONFLICT DO NOTHING`

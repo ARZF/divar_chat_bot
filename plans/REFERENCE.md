@@ -180,7 +180,8 @@ app/
 │   ├── webhook.py        # Phase 1, reworked in Phase 2
 │   ├── oauth.py           # Phase 1 one-time tool kept; Phase 2 adds new per-client routes
 │   ├── auth.py            # Phase 2 (2.8) — OTP, refresh, logout, /auth/me
-│   └── admin.py          # Phase 1, reworked in Phase 2
+│   ├── admin.py          # Phase 1, reworked in Phase 2
+│   └── seller.py         # Phase 2 (2.7) — POST /seller/posts (post-token registration)
 ├── services/
 │   ├── divar.py          # Phase 1, reworked in Phase 2 (header split, get_user)
 │   ├── price_lookup.py   # Phase 1, reworked in Phase 2 (per-client cache)
@@ -188,7 +189,8 @@ app/
 │   └── ai.py             # Phase 4 only — do not create earlier
 ├── schemas/
 │   ├── webhook.py        # Phase 1 (gains 2 fields, see above), Phase 2 unchanged
-│   └── admin.py          # Phase 1
+│   ├── admin.py          # Phase 1
+│   └── seller.py         # Phase 2 (2.7) — post-token register request/response
 ├── models/               # Phase 2 only — do not create earlier
 │   ├── client.py
 │   ├── oauth_token.py     # Phase 2 (2.8) — Divar OAuth tokens per client

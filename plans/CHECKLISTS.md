@@ -93,5 +93,14 @@
 
 - [ ] Add authentication metrics (OTP requests, verification success rate, OAuth login success rate, refresh usage, SMS failures).
 - [ ] Add monitoring and alerting for abnormal authentication failure rates.
+
+### Config Cleanup
+
+- [ ] Remove the now-dead `admin_token` field from `Settings` (`config.py`) and from
+      `.env`. As of 2.7 (2026-07-21) no source code references `settings.admin_token` —
+      the seller-facing endpoints now authenticate via `get_current_client_id()` (JWT).
+      Only the `config.py` field definition, doc prose, and the tests' `os.environ`
+      setup (which merely satisfies the required Settings field) still mention it. Drop
+      the field and update the test env-var setup in the same cleanup pass.
 ---
 
