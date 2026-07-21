@@ -4,6 +4,12 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-07-21** — 2.4 status corrected: discovered ~60% pre-built while auditing 2.7's
+  dependency on `refresh_lookup_cache`. Item 1's cache shape (dataclass, `int`-keyed)
+  accepted as the real spec, replacing the original literal dict shape. Two real gaps
+  remain open (startup cache warming; `get_price` missing `db` param + DB re-fetch). See
+  PHASE2.md §2.4 for full detail.
+
 ## Changelog
 
 - **2026-07-21** — Corrected `price_lookup.py`/2.4 spec: `_parse_df` raises `AttributeError`
@@ -150,4 +156,3 @@
   message text despite the Security Checklist's existing "no PII in logs" rule; this is
   recorded as a deliberate, dated, temporary override in both 1.B3 and the Security Checklist
   itself, not a silent contradiction — flagged for revisit before production launch.
-

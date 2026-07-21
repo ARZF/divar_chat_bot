@@ -349,28 +349,52 @@ chat-sending permission, since chat-sending needs no OAuth at all:**
 > The fix is a hybrid cache: the `products` table is the source of truth; a per-tenant
 > in-memory index is rebuilt only on app startup and after an admin upload for that tenant.
 
-- [ ] Replace the Phase 1 flat in-memory dict with a structure keyed by `client_id`:
+> **STATUS (audited 2026-07-21, during 2.7's implementation):** this section is
+> **substantially already built** in `services/price_lookup.py`, discovered while
+> implementing 2.7 (which depends on `refresh_lookup_cache`/`load_prices_to_db`).
+> `STATUS.md` previously implied "not started" — that was stale. Actual state per item,
+> below. Two real gaps remain (items 2's startup-warming and 3's `db` re-fetch) — those
+> are still open `[ ]` tasks for whoever picks this section up properly.
+
+- [x] **Per-client cache structure — satisfied, with an approved shape deviation.**
+      Actual implementation (`price_lookup.py`):
       ```python
-      _product_cache: dict[str, dict[str, int]] = {}   # client_id -> {normalized_name: product_id}
-      _product_names: dict[str, list[str]] = {}          # client_id -> [normalized_name, ...]
+      _cache: dict[int, ClientPriceCache] = {}   # client_id (int) -> ClientPriceCache
+      # ClientPriceCache dataclass holds: prices, canonical_names, product_names
       ```
-      A single flat global shared across all tenants is **not acceptable**.
-- [ ] Implement `refresh_lookup_cache(db: AsyncSession, client_id: str) -> None` — rebuilds
-      only that tenant's slice. Call once per known `client_id` on app startup, and for the
-      affected `client_id` only after every admin upload.
-- [ ] `get_price(db, client_id, item_name, threshold=70.0)` runs the fuzzy match against
-      `_product_names[client_id]` only, then re-fetches the matched row from the DB filtered
-      by `client_id` as a defense-in-depth check.
-- [ ] Admin upload becomes a scoped, transactional replace (delete scoped by `client_id`,
-      insert tagged with that `client_id`, commit, then `refresh_lookup_cache`)
-- [ ] **New:** if `_parse_df` raises `AttributeError` (confirmed 2026-07-21 — not
-      `KeyError` as originally assumed; `_parse_df` uses `itertuples()` attribute access,
-      so a missing `"price"` or `"product"` column raises `AttributeError` on the
-      namedtuple) because the uploaded file is missing a `"price"` or `"product"` column,
-      the admin endpoint must catch **`AttributeError`** and return `HTTP 400` with a
-      message naming the missing column — not a raw `500`. Catching `KeyError` here would
-      not actually catch this failure — confirm the except clause targets the right
-      exception type before relying on it.
+      This deviates from the shape originally specified below (kept for historical
+      context, not to be implemented — the dataclass approach above is the accepted
+      design): `dict[str, dict[str, int]]` keyed by `client_id: str` storing
+      `{normalized_name: product_id}`, plus a parallel `dict[str, list[str]]` for names.
+      **Decision (2026-07-21): the dataclass shape is accepted as the real spec going
+      forward** — it satisfies the actual requirement (per-tenant isolation, no flat
+      global) via a cleaner structure than originally written. Do not "fix" this to
+      match the old literal dict shape.
+- [ ] **`refresh_lookup_cache(db, client_id)` — PARTIALLY done.** Function exists and is
+      correctly called after every admin upload (via `load_prices_to_db`). **Still
+      missing:** the "call once per known `client_id` on app startup" behavior —
+      `main.py`'s lifespan never warms the cache; `chatbot.py` currently only populates
+      lazily on first cache-miss per client. This lazy-load covers correctness but not
+      the original startup-warming requirement (first message per client currently pays
+      a cold-cache penalty). Remaining task: add startup warming in `main.py`'s
+      lifespan, iterating known `client_id`s and calling `refresh_lookup_cache` for each.
+- [ ] **`get_price(client_id, item_name, threshold=70.0)` — PARTIALLY done.** Fuzzy match
+      against that client's `product_names` is correctly scoped and working. **Still
+      missing:** (a) no `db` parameter — current signature doesn't accept a DB session
+      at all; (b) no DB re-fetch defense-in-depth — the matched result is returned
+      straight from the in-memory cache with no `client_id`-filtered re-verification
+      against the `products` table. Remaining task: add `db: AsyncSession` param, and
+      after a cache hit, re-fetch the matched row from `products` filtered by
+      `client_id` before returning, per the original defense-in-depth intent.
+- [x] **Admin upload scoped transactional replace — satisfied** (service layer). 
+      `load_prices_to_db(db, client_id, df)` does exactly the specified sequence: scoped
+      delete → scoped insert → commit → `refresh_lookup_cache`. (The *endpoint's* JWT
+      scoping was 2.7's job, not 2.4's — see PHASE2.md §2.7.)
+- [x] **`_parse_df` `AttributeError` → HTTP 400 — resolved as a side effect of 2.7.**
+      Confirmed `_parse_df` raises `AttributeError` (not `KeyError` — see 2026-07-21
+      changelog entry), via `itertuples()` attribute access. This is fixed in 2.7's
+      `/admin/upload-prices` rework (catches `AttributeError`, not the previously-wrong
+      `KeyError`) — not a separate 2.4 task anymore.
 
 ## 2.5 Background Task / Session Lifetime
 
@@ -620,4 +644,3 @@ async def get_current_client_id(
   consider global rate limiting for `/auth/*`)
 
 ---
-
