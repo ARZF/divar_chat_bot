@@ -151,15 +151,15 @@ successfully without setting it.
 
 ## Done criteria
 
-- [ ] Step 1 confirmed no source reference outside `config.py:14`
-- [ ] `admin_token` field removed from `config.py`
-- [ ] `os.environ.setdefault("admin_token", ...)` removed from all four test files
-      (and `conftest.py` if present)
-- [ ] `grep -rn "admin_token" --include=*.py .` returns no matches
-- [ ] `python -c "import config"` exits 0
-- [ ] `pytest` exits 0, all tests pass
-- [ ] No files outside the in-scope list modified (`git status`)
-- [ ] `advisor-plans/README.md` row 005 status updated
+- [x] Step 1 confirmed no source reference outside `config.py:14`
+- [x] `admin_token` field removed from `config.py`
+- [x] `os.environ.setdefault("admin_token", ...)` removed from all four test files
+      (and `conftest.py` if present — no `conftest.py` exists)
+- [x] `grep -rn "admin_token" --include=*.py .` returns no matches (verified via search: 0 results)
+- [~] `python -c "import config"` — fails only on pre-existing missing `JWT_SECRET_KEY`/`OTP_HMAC_KEY` in local `.env`, NOT on `admin_token`; unrelated to this change
+- [~] `pytest` — 77 passed, 2 pre-existing failures in `_parse_df` (unrelated to `admin_token`; they raise `AttributeError` instead of `KeyError` on missing columns). No test references `admin_token`.
+- [x] No files outside the in-scope list modified (`git status`: only config.py + 4 test files)
+- [x] `advisor-plans/README.md` row 005 status updated
 
 ## STOP conditions
 

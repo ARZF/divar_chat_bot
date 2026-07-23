@@ -11,7 +11,6 @@ class Settings(BaseSettings):
     DIVAR_APP_SLUG: str
     DIVAR_CLIENT_SECRET: str
     DIVAR_REDIRECT_URI: str
-    admin_token: str
     DATABASE_URL: str
     EXPERIMENTAL_CLIENT_ID: int | None = None
 

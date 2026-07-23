@@ -9,7 +9,6 @@ os.environ.setdefault("DIVAR_IDENTIFICATION_KEY", "test_identification_key")
 os.environ.setdefault("DIVAR_APP_SLUG", "test_app_slug")
 os.environ.setdefault("DIVAR_CLIENT_SECRET", "test_client_secret")
 os.environ.setdefault("DIVAR_REDIRECT_URI", "https://example.com/callback")
-os.environ.setdefault("admin_token", "test_admin_token")
 
 import pytest
 from io import BytesIO
