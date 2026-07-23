@@ -166,14 +166,14 @@ class TestParseDf:
             "samsung galaxy s22": "Samsung Galaxy S22",
         }
 
-    def test_missing_product_column_raises_key_error(self):
+    def test_missing_product_column_raises_attribute_error(self):
         df = pd.DataFrame({"name": ["iPhone 13"], "price": [35000000]})
-        with pytest.raises(KeyError):
+        with pytest.raises(AttributeError):
             _parse_df(df)
 
-    def test_missing_price_column_raises_key_error(self):
+    def test_missing_price_column_raises_attribute_error(self):
         df = pd.DataFrame({"product": ["iPhone 13"], "cost": [35000000]})
-        with pytest.raises(KeyError):
+        with pytest.raises(AttributeError):
             _parse_df(df)
 
     def test_nan_prices_skipped(self):
