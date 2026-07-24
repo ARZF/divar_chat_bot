@@ -203,14 +203,14 @@ exercise CORS, so they must still pass unchanged.)
 
 ## Done criteria
 
-- [ ] `config.py` defines `CORS_ALLOWED_ORIGINS: List[str] = []`
-- [ ] `main.py` passes `settings.CORS_ALLOWED_ORIGINS` to the CORS middleware
-- [ ] `grep -n 'allow_origins=\["\*"\]' main.py` returns no matches
-- [ ] `allow_credentials=True` is retained (cookie flow still works for allowed origins)
-- [ ] `python -c "import main"` exits 0
-- [ ] `pytest` exits 0, all existing tests pass
-- [ ] No files outside the in-scope list modified (`git status`)
-- [ ] `advisor-plans/README.md` row 002 status updated
+- [x] `config.py` defines `CORS_ALLOWED_ORIGINS: List[str] = []`
+- [x] `main.py` passes `settings.CORS_ALLOWED_ORIGINS` to the CORS middleware
+- [x] `grep -n 'allow_origins=\["\*"\]' main.py` returns no matches
+- [x] `allow_credentials=True` is retained (cookie flow still works for allowed origins)
+- [x] `python -c "import main"` exits 0
+- [x] `pytest` exits 0, all existing tests pass
+- [x] No files outside the in-scope list modified (`git status`)
+- [x] `advisor-plans/README.md` row 002 status updated
 
 ## STOP conditions
 

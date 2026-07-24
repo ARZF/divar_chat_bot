@@ -1,4 +1,4 @@
-from typing import FrozenSet, Dict
+from typing import FrozenSet, Dict, List
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     DIVAR_REDIRECT_URI: str
     DATABASE_URL: str
     EXPERIMENTAL_CLIENT_ID: int | None = None
+
+    CORS_ALLOWED_ORIGINS: List[str] = []
 
     # --- 🔐 Seller Authentication (section 2.8) ---
     JWT_SECRET_KEY: str                        # signing key for access JWTs — .env only, never logged
