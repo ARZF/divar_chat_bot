@@ -207,6 +207,7 @@ app/
 ├── config.py             # Phase 1
 ├── logging_config.py     # Phase 1 (added 1.B3) — structured logging setup
 ├── main.py               # Phase 1
+├── .env.example          # committed template — copy to .env and fill in real values
 └── PLAN.md
 tests/
 ├── test_webhook.py

@@ -203,13 +203,13 @@ appears in `.env.example`. Required fields are those without `= <default>`:
 
 ## Done criteria
 
-- [ ] `.gitignore` contains `!.env.example`
-- [ ] `git check-ignore .env.example` returns exit code 1 (not ignored)
-- [ ] `.env.example` exists and contains every required `config.py` setting
-- [ ] No real secret values appear in `.env.example` (placeholders only)
-- [ ] `git status` shows `.env.example` as trackable
-- [ ] No files outside the in-scope list modified (`git status`)
-- [ ] `advisor-plans/README.md` row 006 status updated
+- [x] `.gitignore` contains `!.env.example`
+- [x] `git check-ignore .env.example` returns exit code 1 (not ignored)
+- [x] `.env.example` exists and contains every required `config.py` setting
+- [x] No real secret values appear in `.env.example` (placeholders only)
+- [x] `git status` shows `.env.example` as trackable
+- [x] No files outside the in-scope list modified (`git status`)
+- [x] `advisor-plans/README.md` row 006 status updated
 
 ## STOP conditions
 
