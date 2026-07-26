@@ -227,7 +227,7 @@ messages:       id, conversation_id (FK, indexed), divar_message_id (Unique),
 >
 > **What OAuth is actually needed for in this project, confirmed from the doc:** retrieving a
 > seller's **phone number** and **user ID** via `scope=USER_PHONE USER_ID`
-> (`POST /v1/open-platform/users`) — which 2.8's "Sign in with Divar" login/merge-by-phone
+> (`GET /v1/open-platform/users`) — which 2.8's "Sign in with Divar" login/merge-by-phone
 > flow genuinely depends on. That is the *only* confirmed use of per-seller OAuth tokens in
 > this plan. `oauth_tokens` (2.2) exists to support **that** OAuth use case, not to authorize
 > `send_message`.
@@ -241,11 +241,21 @@ messages:       id, conversation_id (FK, indexed), divar_message_id (Unique),
 > initiated via its own touchpoints. The app scopes replies to the correct seller's catalog
 > internally via 2.1/2.4.
 >
-> **get_user response shape — defensive handling (2026-07-03):** `docs/oauth/get_user.md`
-> shows `{"phone_number": "...", "user_id": "..."}` (singular string fields), while
-> `docs/oauth/ReadMe.md` step 4 shows `{"phone_numbers": [...]}` (plural array). The
-> implementation handles both shapes defensively: checks for `phone_number` (string) first,
-> then `phone_numbers` (array), extracts first entry either way. Same for `user_id`.
+> **get_user response shape — confirmed live (2026-07-20):** A real successful
+> `GET /v1/open-platform/users` response returned all three fields together:
+> ```json
+> {
+>   "phone_numbers": ["<phone_number>"],
+>   "phone_number": "<phone_number>",
+>   "user_id": "<per-app-user-id>"
+> }
+> ```
+> `phone_number` is a singular string, `phone_numbers` is an array containing the same phone
+> number, and `user_id` is a singular string. This resolves the apparent documentation
+> conflict: the live API includes both phone representations simultaneously. The
+> implementation must still parse defensively for backward compatibility: prefer a non-empty
+> `phone_number`, otherwise use the first non-empty string in `phone_numbers`. Read `user_id`
+> directly from its singular field when present.
 >
 > **HTTP method — resolved (2026-07-20):** `get_user.md` also disagrees with `ReadMe.md` on
 > method (`GET` vs `POST`) for this same endpoint. Confirmed via live test: `GET` reaches
@@ -268,9 +278,10 @@ messages:       id, conversation_id (FK, indexed), divar_message_id (Unique),
       `GET /v1/open-platform/users` (confirmed via live test 2026-07-20 — see changelog;
       `docs/oauth/ReadMe.md`'s `POST` example is stale) with `X-Api-Key` +
       `Authorization: Bearer {access_token}`,
-      returns the phone number from the response (handles both `phone_number` string and
-      `phone_numbers` array shapes defensively), or `None` if the field is absent/empty
-      or the API call fails. Does not raise — caller decides the failure behavior.
+      returns the phone number from the confirmed response shape above (prefer the non-empty
+      `phone_number` string, then fall back to the first non-empty string in `phone_numbers`),
+      or `None` if both fields are absent/empty or the API call fails. Does not raise — caller
+      decides the failure behavior.
       Used only by 2.8's OAuth-login callback.
 - [ ] **Split the single `_headers()` into two builders** so auth mechanisms are no longer
       conflated (today `_headers()` sends *both* `X-Api-Key` and `Authorization: Bearer` on every
@@ -278,7 +289,7 @@ messages:       id, conversation_id (FK, indexed), divar_message_id (Unique),
       used by `send_message`/`get_conversation`) and `_oauth_headers(access_token: str) -> dict`
       (`X-Api-Key` + `Authorization: Bearer {access_token}` — used only by
       `get_user_phone_number`). Confirmed against docs: `POST /chat/bot/conversations/{id}/messages`
-      requires `X-Api-Key` only (no Bearer), while `POST /v1/open-platform/users` requires both.
+      requires `X-Api-Key` only (no Bearer), while `GET /v1/open-platform/users` requires both.
 - [ ] **Remove the OAuth refresh-on-401/403 block from `send_message` and `get_conversation`.**
       These endpoints authenticate via the API key, not the OAuth token, so a 401/403 from them is
       not a token-expiry condition — refreshing `settings.DIVAR_ACCESS_TOKEN`/`DIVAR_REFRESH_TOKEN`
