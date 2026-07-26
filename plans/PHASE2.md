@@ -265,7 +265,7 @@ messages:       id, conversation_id (FK, indexed), divar_message_id (Unique),
 
 **`services/divar.py` — corrected scope of changes for Phase 2:**
 
-- [ ] `send_message(conversation_id: str, text: str) -> bool` and
+- [x] `send_message(conversation_id: str, text: str) -> bool` and
       `get_conversation(conversation_id: str) -> dict` **keep their Phase 1 signatures
       unchanged** — they continue to use the single global `settings.DIVAR_API_KEY` via
       `X-Api-Key`, exactly as today. No `client_id` or `access_token` parameter is added to
@@ -274,7 +274,7 @@ messages:       id, conversation_id (FK, indexed), divar_message_id (Unique),
 - [x] Fix `refresh_access_token()` per bugfix 1.B1 (wrong attribute name, missing `code` field)
       — this function still exists and is still needed, but only for the **OAuth/phone-number**
       use case below, not for `send_message`/`get_conversation`.
-- [ ] Add `get_user_phone_number(access_token: str) -> str | None` — calls
+- [x] Add `get_user_phone_number(access_token: str) -> str | None` — calls
       `GET /v1/open-platform/users` (confirmed via live test 2026-07-20 — see changelog;
       `docs/oauth/ReadMe.md`'s `POST` example is stale) with `X-Api-Key` +
       `Authorization: Bearer {access_token}`,
@@ -283,14 +283,14 @@ messages:       id, conversation_id (FK, indexed), divar_message_id (Unique),
       or `None` if both fields are absent/empty or the API call fails. Does not raise — caller
       decides the failure behavior.
       Used only by 2.8's OAuth-login callback.
-- [ ] **Split the single `_headers()` into two builders** so auth mechanisms are no longer
+- [x] **Split the single `_headers()` into two builders** so auth mechanisms are no longer
       conflated (today `_headers()` sends *both* `X-Api-Key` and `Authorization: Bearer` on every
       call, which only works by accident): `_api_key_headers() -> dict` (`X-Api-Key` only —
       used by `send_message`/`get_conversation`) and `_oauth_headers(access_token: str) -> dict`
       (`X-Api-Key` + `Authorization: Bearer {access_token}` — used only by
       `get_user_phone_number`). Confirmed against docs: `POST /chat/bot/conversations/{id}/messages`
       requires `X-Api-Key` only (no Bearer), while `GET /v1/open-platform/users` requires both.
-- [ ] **Remove the OAuth refresh-on-401/403 block from `send_message` and `get_conversation`.**
+- [x] **Remove the OAuth refresh-on-401/403 block from `send_message` and `get_conversation`.**
       These endpoints authenticate via the API key, not the OAuth token, so a 401/403 from them is
       not a token-expiry condition — refreshing `settings.DIVAR_ACCESS_TOKEN`/`DIVAR_REFRESH_TOKEN`
       there is dead logic that also mutates global token state for no reason. `refresh_access_token`
@@ -302,9 +302,9 @@ chat-sending permission, since chat-sending needs no OAuth at all:**
 
 **`GET /oauth/start`** *(no path param — single purpose now: "Sign in with Divar")*
 
-- [ ] Generates a random, unguessable `state` value, stores `state -> "LOGIN"` (in-memory,
+- [x] Generates a random, unguessable `state` value, stores `state -> "LOGIN"` (in-memory,
       short TTL — short-lived handshake artifact, not durable data)
-- [ ] Redirects to:
+- [x] Redirects to:
       ```
       https://oauth.divar.ir/oauth2/auth?response_type=code
         &client_id={settings.DIVAR_APP_SLUG}
@@ -321,14 +321,14 @@ chat-sending permission, since chat-sending needs no OAuth at all:**
 
 **`GET /oauth/callback`**
 
-- [ ] Reads `state` and `code` from query params
-- [ ] **Rejects with `HTTP 400` if `state` is missing or doesn't match the stored `"LOGIN"`
+- [x] Reads `state` and `code` from query params
+- [x] **Rejects with `HTTP 400` if `state` is missing or doesn't match the stored `"LOGIN"`
       mapping** (per-client version of the 1.B2 bugfix)
-- [ ] Exchanges `code` for tokens: `POST https://oauth.divar.ir/oauth2/token` with
+- [x] Exchanges `code` for tokens: `POST https://oauth.divar.ir/oauth2/token` with
       `grant_type: "authorization_code"`, `code`, `client_id` (=`DIVAR_APP_SLUG`),
       `client_secret`, `redirect_uri` — exactly per the doc's step 3 example
-- [ ] Calls `get_user_phone_number(access_token)` to get the seller's phone number
-- [ ] **Failure path — phone number unavailable:** If `get_user_phone_number()` returns
+- [x] Calls `get_user_phone_number(access_token)` to get the seller's phone number
+- [x] **Failure path — phone number unavailable:** If `get_user_phone_number()` returns
       `None` (seller declined `USER_PHONE` scope, field absent from response, empty array,
       or the `get_user` API call itself failed): return HTTP 403 with
       `{"error": "phone_required", "message": "دسترسی به شماره تلفن الزامی است. لطفاً مجدداً با تأیید دسترسی شماره تلفن وارد شوید."}`.
@@ -339,11 +339,17 @@ chat-sending permission, since chat-sending needs no OAuth at all:**
       returned ONLY if the `USER_PHONE` scope is present in the access token — each field
       is independently conditional on its respective scope. Since `phone_number` is the sole
       merge key for `find_or_create_client`, authentication cannot proceed without it.
-- [ ] Hands off to 2.8's find-or-create-by-phone logic to resolve (or create) the `client_id`
-- [ ] Stores `access_token`, `refresh_token`, `token_expires_at` on the resolved `clients` row
-- [ ] Removes the `state` mapping after use (one-time use)
-- [ ] Issues the seller session per 2.8 and redirects/responds accordingly — does not return
+- [x] Hands off to 2.8's find-or-create-by-phone logic to resolve (or create) the `client_id`
+- [x] Stores `access_token`, `refresh_token`, `token_expires_at` on the resolved `clients` row
+- [x] Removes the `state` mapping after use (one-time use)
+- [x] Issues the seller session per 2.8 and redirects/responds accordingly — does not return
       the raw token response to the browser
+
+> **Temporary callback response (2026-07-26):** Until a seller frontend/panel URL exists,
+> `GET /oauth/callback` returns the same JSON `{"access_token", "expires_in"}` contract as
+> OTP login and sets the HTTP-only refresh cookie. Once a seller-facing frontend/panel
+> destination is defined, replace this with a `RedirectResponse`; this JSON response is not
+> the permanent browser-flow design.
 
 > NOTE — refresh flow for this OAuth use case only (not send_message): on access-token
 > expiry, call `refresh_access_token()` per the corrected 1.B1 implementation (passing the

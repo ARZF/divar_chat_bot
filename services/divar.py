@@ -7,6 +7,7 @@ logger = logging.getLogger("divar")
 client: httpx.AsyncClient = None  # Set at startup via lifespan in main.py
 
 BASE_URL = "https://open-api.divar.ir"
+USER_URL = f"{BASE_URL}/v1/open-platform/users"
 
 
 def _api_key_headers() -> dict:
@@ -25,6 +26,57 @@ def _oauth_headers(access_token: str) -> dict:
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+
+
+async def get_user(access_token: str) -> dict | None:
+    """Return the OAuth user's phone number and per-app Divar user ID.
+
+    The two fields are independently conditional on the scopes granted by the user.
+    Phone parsing follows the live API shape while remaining compatible with the older
+    documented ``phone_numbers`` array. Lookup failures are intentionally converted to
+    ``None`` so the login callback can decide how authentication should fail.
+    """
+    try:
+        response = await client.get(USER_URL, headers=_oauth_headers(access_token))
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError):
+        logger.warning("Divar OAuth user lookup failed", exc_info=True)
+        return None
+
+    if not isinstance(payload, dict):
+        logger.warning("Divar OAuth user lookup returned an invalid response shape")
+        return None
+
+    phone_number = payload.get("phone_number")
+    if not isinstance(phone_number, str) or not phone_number.strip():
+        phone_number = None
+        phone_numbers = payload.get("phone_numbers")
+        if isinstance(phone_numbers, list):
+            phone_number = next(
+                (
+                    candidate.strip()
+                    for candidate in phone_numbers
+                    if isinstance(candidate, str) and candidate.strip()
+                ),
+                None,
+            )
+    else:
+        phone_number = phone_number.strip()
+
+    user_id = payload.get("user_id")
+    if not isinstance(user_id, str) or not user_id.strip():
+        user_id = None
+    else:
+        user_id = user_id.strip()
+
+    return {"phone_number": phone_number, "user_id": user_id}
+
+
+async def get_user_phone_number(access_token: str) -> str | None:
+    """Return only the OAuth user's phone number, preserving section 2.3's API."""
+    user = await get_user(access_token)
+    return user["phone_number"] if user is not None else None
 
 
 async def refresh_access_token(current_access_token: str) -> tuple[str, str]:

@@ -1,11 +1,20 @@
 import logging
 import secrets
+import time
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+import httpx
+from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth import find_or_create_client, issue_session
 from config import settings
+from db.session import get_db
+from models.oauth_token import OAuthToken
+from schemas.auth import TokenResponse
 import services.divar as divar_service
 
 logger = logging.getLogger("oauth")
@@ -18,6 +27,147 @@ router = APIRouter()
 # This tool is retired once 2.8 (seller auth) + 2.3 (OAuth login) are live end-to-end —
 # see PLAN.md changelog.
 _pending_state: str | None = None
+
+# Real seller-login handshakes. This is deliberately separate from the single-state
+# Phase 1 dev bootstrap variable above so concurrent sellers do not overwrite each
+# other's state. States are short-lived, process-local handshake artifacts.
+LOGIN_STATE_TTL_SECONDS = 10 * 60
+_login_states: dict[str, float] = {}
+
+
+def _remove_expired_login_states(now: float | None = None) -> None:
+    """Lazily remove seller-login states whose 10-minute TTL has elapsed."""
+    current_time = time.time() if now is None else now
+    expired_states = [
+        state for state, expires_at in _login_states.items()
+        if expires_at <= current_time
+    ]
+    for state in expired_states:
+        _login_states.pop(state, None)
+
+
+@router.get("/oauth/start")
+async def oauth_start() -> RedirectResponse:
+    """Start the real seller-facing "Sign in with Divar" flow."""
+    now = time.time()
+    _remove_expired_login_states(now)
+
+    state = secrets.token_urlsafe(32)
+    _login_states[state] = now + LOGIN_STATE_TTL_SECONDS
+
+    params = {
+        "response_type": "code",
+        "client_id": settings.DIVAR_APP_SLUG,
+        "redirect_uri": settings.DIVAR_REDIRECT_URI,
+        "scope": "USER_PHONE USER_ID offline_access",
+        "state": state,
+    }
+    auth_url = f"https://oauth.divar.ir/oauth2/auth?{urlencode(params)}"
+    return RedirectResponse(url=auth_url)
+
+
+@router.get("/oauth/callback", response_model=TokenResponse)
+async def oauth_callback(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+) -> TokenResponse | JSONResponse:
+    """Complete seller login, persist Divar tokens, and issue the app session."""
+    state = request.query_params.get("state")
+    code = request.query_params.get("code")
+
+    if not state:
+        logger.warning("Seller OAuth callback rejected: missing state parameter")
+        return JSONResponse(
+            status_code=400, content={"detail": "Missing state parameter"}
+        )
+
+    _remove_expired_login_states()
+    if state not in _login_states:
+        logger.warning("Seller OAuth callback rejected: invalid or expired state")
+        return JSONResponse(
+            status_code=400, content={"detail": "Invalid state parameter"}
+        )
+
+    # Consume immediately after validation: a callback state is one-time use even if
+    # the user denied consent or a downstream Divar request later fails.
+    _login_states.pop(state, None)
+
+    if not code:
+        logger.warning("Seller OAuth callback rejected: authorization code missing")
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Authorization code not provided"},
+        )
+
+    token_url = "https://oauth.divar.ir/oauth2/token"
+    token_payload = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "client_id": settings.DIVAR_APP_SLUG,
+        "client_secret": settings.DIVAR_CLIENT_SECRET,
+        "redirect_uri": settings.DIVAR_REDIRECT_URI,
+    }
+    try:
+        token_response = await divar_service.client.post(token_url, data=token_payload)
+        token_response.raise_for_status()
+        token_data = token_response.json()
+        access_token = token_data["access_token"]
+        refresh_token = token_data["refresh_token"]
+        expires_in = int(token_data["expires_in"])
+    except (httpx.HTTPError, KeyError, TypeError, ValueError):
+        logger.warning("Seller OAuth token exchange failed", exc_info=True)
+        return JSONResponse(
+            status_code=502,
+            content={"detail": "Divar OAuth token exchange failed"},
+        )
+
+    user = await divar_service.get_user(access_token)
+    if user is None or not user.get("phone_number"):
+        logger.warning(
+            "Seller OAuth login rejected: phone number unavailable after user lookup"
+        )
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "phone_required",
+                "message": (
+                    "دسترسی به شماره تلفن الزامی است. لطفاً مجدداً با تأیید دسترسی "
+                    "شماره تلفن وارد شوید."
+                ),
+            },
+        )
+
+    client = await find_or_create_client(
+        db,
+        phone_number=user["phone_number"],
+        divar_user_id=user.get("user_id"),
+    )
+
+    token_result = await db.execute(
+        select(OAuthToken).where(OAuthToken.client_id == client.id)
+    )
+    oauth_token = token_result.scalar_one_or_none()
+    token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+    if oauth_token is None:
+        oauth_token = OAuthToken(
+            client_id=client.id,
+            divar_access_token=access_token,
+            divar_refresh_token=refresh_token,
+            token_expires_at=token_expires_at,
+        )
+        db.add(oauth_token)
+    else:
+        oauth_token.divar_access_token = access_token
+        oauth_token.divar_refresh_token = refresh_token
+        oauth_token.token_expires_at = token_expires_at
+    await db.commit()
+
+    session = await issue_session(db, client, response)
+    # TEMPORARY: return the same JSON contract as OTP login because no seller
+    # frontend/panel callback URL exists yet. Replace this with RedirectResponse once
+    # that destination is defined; never expose the raw Divar OAuth token response.
+    return TokenResponse(**session)
 
 
 @router.get("/oauth/dev/start")

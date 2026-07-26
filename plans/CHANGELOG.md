@@ -4,6 +4,17 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-07-26 (2.3 implementation decisions)** — Implemented the real seller-facing
+  `/oauth/start` and `/oauth/callback` routes alongside the retained `/oauth/dev/*` bootstrap
+  routes. Real login state uses a process-local `dict[str, float]` of state-to-expiry values
+  with lazy cleanup and a 10-minute TTL, rather than the bootstrap tool's single global state,
+  so concurrent seller handshakes do not overwrite one another. The callback temporarily
+  returns the existing `{"access_token", "expires_in"}` JSON session contract with the refresh
+  cookie because no seller frontend/panel URL exists yet; it should become a `RedirectResponse`
+  once that destination is defined. The Divar user lookup now has a `get_user()` helper that
+  returns the defensively parsed `phone_number` and `user_id` from one GET request, while the
+  required `get_user_phone_number() -> str | None` remains as a thin phone-only wrapper.
+
 - **2026-07-21** — 2.4 status corrected: discovered ~60% pre-built while auditing 2.7's
   dependency on `refresh_lookup_cache`. Item 1's cache shape (dataclass, `int`-keyed)
   accepted as the real spec, replacing the original literal dict shape. Two real gaps

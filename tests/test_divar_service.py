@@ -25,6 +25,7 @@ SEND_MSG_URL = (
 )
 GET_CONV_URL = "https://open-api.divar.ir/v1/open-platform/chat/conversations/{conv_id}"
 TOKEN_URL = "https://oauth.divar.ir/oauth2/token"
+USER_URL = "https://open-api.divar.ir/v1/open-platform/users"
 
 
 @pytest.fixture(autouse=True)
@@ -195,6 +196,68 @@ async def test_get_conversation_401_logs_api_key_error(httpx_mock, caplog):
         await divar.get_conversation("conv_123")
 
     assert any("DIVAR_API_KEY" in record.message for record in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# get_user / get_user_phone_number — section 2.3
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_user_returns_phone_and_user_id_from_live_shape(httpx_mock):
+    route = httpx_mock.get(USER_URL).respond(
+        200,
+        json={
+            "phone_numbers": ["09123456789"],
+            "phone_number": "09123456789",
+            "user_id": "divar-user-1",
+        },
+    )
+
+    result = await divar.get_user("seller_access_token")
+
+    assert result == {
+        "phone_number": "09123456789",
+        "user_id": "divar-user-1",
+    }
+    request = route.calls[0].request
+    assert request.method == "GET"
+    assert request.headers["x-api-key"] == "test_api_key"
+    assert request.headers["authorization"] == "Bearer seller_access_token"
+
+
+@pytest.mark.asyncio
+async def test_get_user_falls_back_to_first_non_empty_phone_number(httpx_mock):
+    httpx_mock.get(USER_URL).respond(
+        200,
+        json={"phone_number": "", "phone_numbers": ["", " 09120000000 "]},
+    )
+
+    result = await divar.get_user("seller_access_token")
+
+    assert result == {"phone_number": "09120000000", "user_id": None}
+
+
+@pytest.mark.asyncio
+async def test_get_user_phone_number_wrapper_returns_only_phone(httpx_mock):
+    httpx_mock.get(USER_URL).respond(
+        200,
+        json={"phone_number": "09121111111", "user_id": "divar-user-2"},
+    )
+
+    result = await divar.get_user_phone_number("seller_access_token")
+
+    assert result == "09121111111"
+
+
+@pytest.mark.asyncio
+async def test_get_user_returns_none_on_api_failure(httpx_mock):
+    route = httpx_mock.get(USER_URL).respond(
+        401, json={"message": "Invalid access token"}
+    )
+
+    assert await divar.get_user("bad_token") is None
+    assert route.call_count == 1
 
 
 # ---------------------------------------------------------------------------
