@@ -7,11 +7,6 @@
 > own notes and the Changelog (see `CHANGELOG.md` for the dated evidence trail if you
 > need to re-verify a claim). 2.3 builds on 1.B1's `refresh_access_token` fix — see
 > `PHASE1.md` if you need that context.
-
-# Phase 2 — Multi-Tenant Conversation Management
-
-> **Agent rule:** Do not begin Phase 2 tasks until `PLAN.md` header reads `Active Phase: 2`,
-> **and** both Phase 1 bugfix tasks (1.B1, 1.B2) are checked off.
 >
 > This section assumes the chatbot is reached **only** via Divar touchpoints (post pages,
 > "my Divar", professional panel, direct chat links) — confirmed against
@@ -659,5 +654,121 @@ async def get_current_client_id(
 - `OTP_HMAC_KEY`: in `.env` only, never logged
 - All auth endpoints should be rate-limited in production (OTP request has explicit cooldown;
   consider global rate limiting for `/auth/*`)
+
+---
+
+## 2.9 Supplier-Wide Chat Messaging (New — additive to the existing chatbot, not a replacement)
+
+> **Do not begin until 2.1, 2.4, 2.5, 2.6 are complete.** This section is intentionally
+> sequenced after the rest of Phase 2's core chatbot hardening — it's higher-risk (new
+> OAuth scopes, an external event-subscription lifecycle, a recurring re-subscription
+> obligation on every token refresh) and entirely additive, so nothing is lost by
+> finishing the foundational chatbot work first. See `CHANGELOG.md` (2026-07-2X entries)
+> for the full investigation trail behind this section's design.
+>
+> **This is NOT a migration.** The existing chatbot (`conversation.type == "BOT"`,
+> `services/divar.py::send_message()`, `api/webhook.py`'s `NEW_CHATBOT_MESSAGE` handling,
+> the `/start`-message resolver in 2.1) stays exactly as-is, untouched, and continues
+> working via `X-Api-Key` with no OAuth involved. This section adds a **second, parallel**
+> conversation system — Divar's general post-chat (`conversation.type == "POST"`) — so
+> your bot can also reply to buyers in a seller's ordinary Divar post chats, not just the
+> `divar.ir/chat/addon_{slug}` chatbot. Both systems share the same webhook URL and must
+> be dispatched by `payload.type`, not replaced.
+
+### Why this is a separate system (confirmed against docs, not inferred)
+
+| | Existing chatbot (untouched) | New: supplier-wide chat (this section) |
+|---|---|---|
+| `conversation.type` | `BOT` | `POST` |
+| Webhook event `type` | `NEW_CHATBOT_MESSAGE` | `NEW_MESSAGE` |
+| Webhook payload field | `new_chatbot_message` | `new_message` |
+| Reply endpoint | `POST /v1/open-platform/chat/bot/conversations/{id}/messages` | `POST /v2/open-platform/conversations/{id}/messages` |
+| Reply auth | `X-Api-Key` only | `X-Api-Key` + seller's OAuth `Authorization: Bearer` |
+| Reply body field | `text_message` | `message` |
+| Send permission | `CHAT_BOT_SEND_MESSAGE` (API-key, app-level) | `CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND` (OAuth, per-seller) |
+| Client-id resolution | Parse `/start` message (2.1) — no `post_token` on this conversation type | `conversation.post_token` present directly on every message — no `/start` parsing needed |
+
+### New OAuth scopes (real `/oauth/start` flow — `api/oauth.py`)
+
+- [ ] Add `CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND` and
+      `CHAT_SUPPLIER_ALL_CONVERSATIONS_READ` to the real `/oauth/start` scope string
+      (confirmed both are flat scopes — no `RESOURCE_ID`/`IDENTIFIER` needed, per
+      `docs/chat/users_conversations.md` and `docs/events/ReadMe.md`).
+- [ ] Add the same two scopes (`CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND` and
+      `CHAT_SUPPLIER_ALL_CONVERSATIONS_READ`) to `/oauth/dev/start` as well, so the
+      dev bootstrap tool can be used to manually test this section's endpoints.
+
+### New: `services/divar.py` — `send_supplier_message()` (new function, `send_message()` untouched)
+
+- [ ] Add `send_supplier_message(conversation_id: str, text: str, access_token: str) -> bool`:
+      - `POST {BASE_URL}/v2/open-platform/conversations/{conversation_id}/messages`
+      - Headers: `_oauth_headers(access_token)` (already exists from 2.3 — reuse, don't
+        duplicate)
+      - Body: `{"type": "TEXT", "message": text}` — note the field is `message`, not
+        `text_message` (System 2's field name); do not reuse System 2's payload builder
+        as-is if one exists.
+      - Do **not** modify `send_message()` or its signature. Both functions coexist.
+
+### Webhook: additive branching, not replacement (`api/webhook.py`, `schemas/webhook.py`)
+
+- [ ] Extend `schemas/webhook.py`'s `EventType` enum to add `NEW_MESSAGE` alongside the
+      existing `NEW_CHATBOT_MESSAGE` member.
+- [ ] Add a `new_message: Optional[ChatMessage]` field to `WebhookPayload`, alongside the
+      existing `new_chatbot_message` field — additive, both fields coexist on the model.
+- [ ] In `api/webhook.py`'s handler, branch explicitly on `payload.type`:
+      ```python
+      if payload.type == EventType.NEW_CHATBOT_MESSAGE:
+          # existing logic, untouched
+          ...
+      elif payload.type == EventType.NEW_MESSAGE:
+          # new logic (see below)
+          ...
+      ```
+- [ ] For `NEW_MESSAGE` events: ignore (200, no-op) any message where
+      `sender.side != "BUYER"` — this excludes both the seller's own messages and your
+      bot's own sent replies (which Divar echoes back with `sender.side == "SELLER"`,
+      confirmed in `docs/events/ReadMe.md`'s own example payload).
+- [ ] For `NEW_MESSAGE` events from a `BUYER`: resolve `client_id` directly via
+      `conversation.post_token` → `posts.client_id` lookup (the existing `posts` table
+      from 2.1/2.2 — no new table needed). **No `/start`-message parsing applies here** —
+      `post_token` is present on every message of this conversation type, not just a
+      one-time launch message.
+       - If `post_token` doesn't resolve to a known `client_id` (e.g. seller never
+         registered that post, or posts row missing): log a warning with `post_token` and
+         `conversation_id` for later investigation, send **no reply** (there is no
+         bot-initiated conversation to inject into — the buyer is messaging the seller
+         directly), and return 200 to Divar immediately (do not trigger a retry for an
+         event we have deliberately chosen not to act on).
+
+### Event subscription registration (new, one-time per seller after login)
+
+- [ ] After a successful `/oauth/callback` login (2.3) that includes the new scopes,
+      register the event subscription:
+      ```
+      POST https://open-api.divar.ir/v1/open-platform/events/subscriptions
+      X-Api-Key: {api_key}
+      Authorization: Bearer {seller's fresh access_token}
+
+      {"event_type": "NEW_MESSAGE_ON_POST"}
+      ```
+      (no `event_resource_id` → all of that seller's posts, per
+      `docs/events/ReadMe.md`; requires the app-level `EVENTS_REGISTER_SUBSCRIPTION`
+      permission, already present in this app's Kenar panel permissions.)
+- [ ] **Mandatory, recurring — do not treat as one-time setup:** per
+      `docs/events/ReadMe.md`, this subscription is tied to the specific access token
+      used to create it. **Every time a seller's OAuth token is refreshed
+      (`refresh_access_token()`), the subscription must be re-registered with the new
+      token**, or that seller's buyer messages silently stop being delivered with no
+      error surfaced anywhere. This needs to be wired into whatever code path eventually
+      handles per-seller token refresh (not yet built — flag this dependency explicitly
+      wherever that refresh-scheduling work happens).
+
+### Explicitly out of scope for this section
+
+- Modifying, removing, or migrating anything in the existing chatbot's code path
+  (`send_message`, `NEW_CHATBOT_MESSAGE` handling, 2.1's `/start` resolver)
+- Production Kenar panel scope approval (per the Pre-Production Checklist, broad OAuth
+  scopes like this need individual review/approval — expect scrutiny, plan for it
+  separately, not assumed automatic)
 
 ---

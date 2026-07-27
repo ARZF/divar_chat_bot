@@ -4,6 +4,30 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-07-27** — Added new section **2.9 — Supplier-Wide Chat Messaging** to
+  `PHASE2.md`, sequenced after 2.1/2.4/2.5/2.6 (not started until those complete).
+  Confirmed via `docs/chat/users_conversations.md`, `docs/events/ReadMe.md`, and
+  `docs/events/chat.md` (Chat Message / Conversation / Message Sender schemas) that
+  Divar's general post-chat (`conversation.type == POST`) is a structurally separate
+  system from this project's existing chatbot (`conversation.type == BOT`) — different
+  webhook event type/field, different reply endpoint/auth/body field, different send
+  permission. This is additive: `send_message()`, the existing `NEW_CHATBOT_MESSAGE`
+  webhook handling, and 2.1's `/start`-parsing resolver are explicitly untouched; 2.9
+  adds a new `send_supplier_message()` function and a new webhook branch dispatching on
+  `payload.type`, both coexisting with the existing code. Confirmed `conversation.type
+  == POST` messages carry `post_token` directly on every message (unlike the chatbot's
+  one-time `/start` message), so client_id resolution for this system reuses the
+  existing `posts` table with a direct lookup, no `/start` parsing needed. **New
+  operational requirement discovered:** per `docs/events/ReadMe.md`, the event
+  subscription (`POST /events/subscriptions`) is bound to the specific access token used
+  to create it — every per-seller token refresh must be followed by re-registering the
+  subscription with the new token, or that seller's buyer messages silently stop
+  arriving with no visible error. This is flagged as a mandatory follow-up task wherever
+  token-refresh scheduling is eventually implemented (not yet built). Two open questions
+  left unresolved in 2.9, pending user decision: whether `/oauth/dev/start` should also
+  request the new scopes, and what to do when a `NEW_MESSAGE` event's `post_token`
+  doesn't resolve to a known client_id.
+
 - **2026-07-26 (2.3 implementation decisions)** — Implemented the real seller-facing
   `/oauth/start` and `/oauth/callback` routes alongside the retained `/oauth/dev/*` bootstrap
   routes. Real login state uses a process-local `dict[str, float]` of state-to-expiry values
@@ -20,8 +44,6 @@
   accepted as the real spec, replacing the original literal dict shape. Two real gaps
   remain open (startup cache warming; `get_price` missing `db` param + DB re-fetch). See
   PHASE2.md §2.4 for full detail.
-
-## Changelog
 
 - **2026-07-21** — Corrected `price_lookup.py`/2.4 spec: `_parse_df` raises `AttributeError`
   on a missing column (via `itertuples()`), not `KeyError` as previously documented. 2.4's
