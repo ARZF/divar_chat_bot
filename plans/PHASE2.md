@@ -47,12 +47,12 @@ posts:    post_token (PK), client_id (FK, indexed), created_at
 
 **Tasks:**
 
-- [ ] Create the `posts` model as above
-- [ ] Implement a parser function `parse_start_message(text: str) -> Optional[Tuple[str, Optional[str]]]`
+- [x] Create the `posts` model as above
+- [x] Implement a parser function `parse_start_message(text: str) -> Optional[Tuple[str, Optional[str]]]`
       returning `(touchpoint_name, token_or_none)` if `text` matches `/start <TOUCHPOINT>
       [<token>]`, else `None`. Must handle all five touchpoint names listed above, and must
       not assume a token is present (handles bare `/start MY_DIVAR` correctly).
-- [ ] In the webhook handler: on first message in a `conversation_id`, if no DB row exists for
+- [x] In the webhook handler: on first message in a `conversation_id`, if no DB row exists for
       that `divar_conversation_id` (i.e. conversation is not yet resolved to a `client_id` via `/start` message), attempt to parse it as a `/start` message:
       - If touchpoint is `MY_POST` or `DEMAND_POST` and a token is present: look up
         `posts.client_id` for that `post_token`. If found, this is the resolved `client_id`
@@ -64,10 +64,10 @@ posts:    post_token (PK), client_id (FK, indexed), created_at
       - If the first message does **not** match `/start ...` at all (defensive case — should
         not normally happen, but the docs do not guarantee it never will): treat the same as
         an unresolved client.
-- [ ] For all messages **after** the first in a given `divar_conversation_id`: look up the
+- [x] For all messages **after** the first in a given `divar_conversation_id`: look up the
       existing `conversations` row by `divar_conversation_id` to retrieve the already-resolved
       `client_id`. Do not re-parse `/start` on every message — only the first one carries it.
-- [ ] **Unresolved conversations have no persisted row, so they are handled statelessly on
+- [x] **Unresolved conversations have no persisted row, so they are handled statelessly on
       every message.** Because nothing is persisted for an unresolved conversation (see NOTE
       below), the "is this the first message?" DB-row-existence check will report *not found*
       for **every** message in that conversation. This is intentional and correct: each message
@@ -77,7 +77,7 @@ posts:    post_token (PK), client_id (FK, indexed), created_at
       per-conversation marker, which this design deliberately avoids. The reply is idempotent
       in effect (same canned message every time) and safe under Divar's at-least-once webhook
       redelivery.
-- [ ] **Add to `config.py`:** `UNRESOLVED_CLIENT_MESSAGE: str` — Persian message asking the
+- [x] **Add to `config.py`:** `UNRESOLVED_CLIENT_MESSAGE: str` — Persian message asking the
       user to open the chat via a specific listing, used when `client_id` cannot be resolved.
 
 > NOTE — why no `conversations` row for unresolved clients: the `conversations` table's

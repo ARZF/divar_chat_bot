@@ -56,7 +56,6 @@ class Settings(BaseSettings):
     DIVAR_REDIRECT_URI: str
     admin_token: str                 # NOTE: may be removed by plan 005 — see Step 2
     DATABASE_URL: str
-    EXPERIMENTAL_CLIENT_ID: int | None = None
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_LIFETIME_MINUTES: int = 30
@@ -150,9 +149,6 @@ admin_token=change-me
 
 # ---- Database ----
 DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/divar_chat_bot
-
-# ---- Optional: experimental single-tenant fallback (leave unset in prod) ----
-# EXPERIMENTAL_CLIENT_ID=1
 
 # ---- Seller auth / JWT (section 2.8) ----
 JWT_SECRET_KEY=generate-a-long-random-string

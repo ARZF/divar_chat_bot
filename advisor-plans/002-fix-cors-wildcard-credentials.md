@@ -75,7 +75,6 @@ class Settings(BaseSettings):
     DIVAR_ACCESS_TOKEN: str
     # ... more required fields ...
     DATABASE_URL: str
-    EXPERIMENTAL_CLIENT_ID: int | None = None
 ```
 
 **config.py:78** (the model config, showing env handling):
@@ -119,8 +118,8 @@ class Settings(BaseSettings):
 ### Step 1: Add a configurable allowed-origins setting to config.py
 
 In `config.py`, add a typed setting to the `Settings` class. Place it near the
-other new-config constants (after `EXPERIMENTAL_CLIENT_ID` on line 16 is a good
-spot). Add the `List` import to the existing `typing` import on line 1.
+other new-config constants, immediately after `DATABASE_URL`. Add the `List`
+import to the existing `typing` import on line 1.
 
 Change line 1 from:
 ```python

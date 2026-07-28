@@ -88,45 +88,7 @@ async def _resolve_new_conversation(
     """
     parsed = parse_start_message(user_text)
 
-    logger.warning(
-        "RESOLVE DEBUG",
-        extra={
-            "user_text": repr(user_text),
-            "parsed": parsed,
-            "experimental_client": settings.EXPERIMENTAL_CLIENT_ID,
-        },
-    )
-
     if parsed is None:
-        if settings.EXPERIMENTAL_CLIENT_ID is not None:
-            client_id = settings.EXPERIMENTAL_CLIENT_ID
-
-            insert_stmt = (
-                pg_insert(Conversation)
-                .values(
-                    client_id=client_id,
-                    divar_conversation_id=divar_conversation_id,
-                    current_state="START",
-                )
-                .on_conflict_do_nothing(
-                    constraint="uq_conversations_client_divar"
-                )
-            )
-
-            await db.execute(insert_stmt)
-            await db.commit()
-
-            logger.warning(
-                "Using experimental fallback without /start",
-                extra={
-                    "conversation_id": divar_conversation_id,
-                    "client_id": client_id,
-                    "user_text": user_text,
-                },
-            )
-
-            return client_id
-
         return None
     
     touchpoint, token = parsed

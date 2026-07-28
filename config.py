@@ -12,7 +12,6 @@ class Settings(BaseSettings):
     DIVAR_CLIENT_SECRET: str
     DIVAR_REDIRECT_URI: str
     DATABASE_URL: str
-    EXPERIMENTAL_CLIENT_ID: int | None = None
 
     CORS_ALLOWED_ORIGINS: List[str] = []
 
