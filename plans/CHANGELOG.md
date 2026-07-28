@@ -4,6 +4,28 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-07-28** — Closed the two remaining `[ ]` gaps in PHASE2.md §2.4 (the other
+  2.4 items were already `[x]` and left untouched):
+  1. **Startup cache warming:** `main.py`'s lifespan now calls
+     `refresh_lookup_cache` for every client that has catalog data
+     (`SELECT DISTINCT client_id FROM products` — clients with no products are
+     intentionally skipped). Wrapped in try/except so a warming failure logs and
+     continues; the lazy-load-on-first-miss fallback in `chatbot.py` is retained
+     as the safety net for clients uploading after boot.
+  2. **`get_price` `db` param + DB re-fetch (defense-in-depth):** `get_price` is
+     now `async def get_price(db, client_id, item_name, threshold=70.0)`. After a
+     fuzzy cache hit resolves a `normalized_name`, the row is re-fetched from
+     `products WHERE client_id = :cid AND normalized_name = :key` and the DB
+     `item_name`/`price` is returned. Cache hit but no DB row (deleted/replaced
+     catalog) → logged as a cache/DB divergence, `None` returned (not found).
+     `_handle_price_intent` in `services/chatbot.py` is now async and threads the
+     existing `handle_bot_reply` session through; no ripple beyond the chatbot
+     service. Tests converted to async against a real in-memory SQLite `products`
+     table (test_auth.py pattern), with two new cases: stale-price (DB wins) and
+     deleted-row (None). `get_all_matching_prices` / `find_top_matches` were left
+     cache-only per the scoped task; their staleness exposure is flagged in
+     PHASE2.md §2.4 as a known residual for a future improvement.
+
 - **2026-07-27** — Added new section **2.9 — Supplier-Wide Chat Messaging** to
   `PHASE2.md`, sequenced after 2.1/2.4/2.5/2.6 (not started until those complete).
   Confirmed via `docs/chat/users_conversations.md`, `docs/events/ReadMe.md`, and

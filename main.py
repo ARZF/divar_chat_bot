@@ -1,6 +1,10 @@
+import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
+
 from config import settings
 from api.webhook import router as webhook_router
 from api.oauth import router as oauth_router
@@ -8,14 +12,49 @@ from api.admin import router as admin_router
 from api.auth import router as auth_router
 from api.seller import router as seller_router
 
+from db.session import AsyncSessionLocal
 from logging_config import setup_logging
+from models.product import Product
 import services.divar as divar_service
+from services.price_lookup import refresh_lookup_cache
 import httpx
+
+logger = logging.getLogger("startup")
+
+
+async def _warm_price_caches() -> None:
+    """Warm the per-client price lookup caches on startup.
+
+    Enumerates every client that has catalog data (``DISTINCT client_id`` from
+    ``products``) and rebuilds its in-memory fuzzy index from the DB. A client
+    with no products is intentionally skipped — there is nothing to warm.
+
+    Failures here must NOT block app startup: the lazy-load fallback in
+    ``services/chatbot.py`` populates any client that wasn't warmed (e.g. one
+    that uploads a catalog after boot, or one missed due to a transient DB
+    error here). On any exception we log and continue.
+    """
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Product.client_id).distinct())
+            client_ids = [row[0] for row in result.all()]
+        for client_id in client_ids:
+            async with AsyncSessionLocal() as db:
+                await refresh_lookup_cache(db, client_id)
+        logger.info(
+            "price caches warmed at startup",
+            extra={"client_count": len(client_ids)},
+        )
+    except Exception:
+        logger.exception("failed to warm price caches at startup; "
+                         "falling back to lazy load per client")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
     divar_service.client = httpx.AsyncClient(timeout=60)
+    await _warm_price_caches()
     yield
     await divar_service.client.aclose()
 

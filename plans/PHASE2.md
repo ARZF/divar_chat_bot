@@ -382,22 +382,36 @@ chat-sending permission, since chat-sending needs no OAuth at all:**
       forward** — it satisfies the actual requirement (per-tenant isolation, no flat
       global) via a cleaner structure than originally written. Do not "fix" this to
       match the old literal dict shape.
-- [ ] **`refresh_lookup_cache(db, client_id)` — PARTIALLY done.** Function exists and is
-      correctly called after every admin upload (via `load_prices_to_db`). **Still
-      missing:** the "call once per known `client_id` on app startup" behavior —
-      `main.py`'s lifespan never warms the cache; `chatbot.py` currently only populates
-      lazily on first cache-miss per client. This lazy-load covers correctness but not
-      the original startup-warming requirement (first message per client currently pays
-      a cold-cache penalty). Remaining task: add startup warming in `main.py`'s
-      lifespan, iterating known `client_id`s and calling `refresh_lookup_cache` for each.
-- [ ] **`get_price(client_id, item_name, threshold=70.0)` — PARTIALLY done.** Fuzzy match
-      against that client's `product_names` is correctly scoped and working. **Still
-      missing:** (a) no `db` parameter — current signature doesn't accept a DB session
-      at all; (b) no DB re-fetch defense-in-depth — the matched result is returned
-      straight from the in-memory cache with no `client_id`-filtered re-verification
-      against the `products` table. Remaining task: add `db: AsyncSession` param, and
-      after a cache hit, re-fetch the matched row from `products` filtered by
-      `client_id` before returning, per the original defense-in-depth intent.
+- [x] **`refresh_lookup_cache(db, client_id)` — done.** Function exists and is
+      correctly called after every admin upload (via `load_prices_to_db`), **and** is
+      now called once per known `client_id` at app startup in `main.py`'s lifespan.
+      Startup warming enumerates clients with catalog data only
+      (`SELECT DISTINCT client_id FROM products` — a client with no products has nothing
+      to warm), loops `refresh_lookup_cache` for each, and is wrapped so a warming
+      failure logs and continues without blocking startup. The lazy-load-on-first-miss
+      fallback in `chatbot.py` is retained as the safety net for clients that upload
+      after boot or are missed at startup.
+- [x] **`get_price(db, client_id, item_name, threshold=70.0)` — done.** Now async with
+      a required `db: AsyncSession` param and defense-in-depth: after a fuzzy cache hit
+      resolves a `normalized_name`, the row is re-fetched from `products` filtered by
+      `client_id` + `normalized_name`, and the **DB** `item_name`/`price` (source of
+      truth) is returned. If the cache hit but the DB row is gone (deleted/replaced
+      catalog since warming) → logged as a cache/DB divergence and `None` returned
+      (treated as not found). This catches stale prices, since-deleted products, and
+      belt-and-suspenders re-verifies tenant scoping. Callers updated:
+      `_handle_price_intent` in `services/chatbot.py` is now async and threads `db`
+      through (the `handle_bot_reply` session is reused — no ripple beyond the
+      chatbot service).
+
+> **Known residual (out of scope this pass, 2026-07-28):** `get_all_matching_prices`
+> (the Tier-1 substring path in `services/chatbot.py`'s `_handle_price_intent`) and
+> `find_top_matches` still read straight from the in-memory cache with no DB re-fetch.
+> They therefore carry the same cache-staleness exposure `get_price` had before this
+> pass (stale price, deleted product). Left unaddressed deliberately — the
+> defense-in-depth requirement was scoped to `get_price` only. Candidate for a future
+> improvement (see `CHECKLISTS.md`'s Future Improvements) if substring-path staleness
+> becomes a real concern. The lazy refresh on cache-miss + startup warming mitigate
+> the window.
 - [x] **Admin upload scoped transactional replace — satisfied** (service layer). 
       `load_prices_to_db(db, client_id, df)` does exactly the specified sequence: scoped
       delete → scoped insert → commit → `refresh_lookup_cache`. (The *endpoint's* JWT

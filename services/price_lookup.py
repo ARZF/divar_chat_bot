@@ -238,21 +238,45 @@ def get_all_matching_prices(
     return matches
 
 
-def get_price(
-    client_id: int, item_name: str, threshold: float = 70.0
+async def get_price(
+    db: AsyncSession,
+    client_id: int,
+    item_name: str,
+    threshold: float = 70.0,
 ) -> Optional[Tuple[str, int]]:
-    """Returns (canonical_product_name, price) if found, else None."""
+    """Returns (canonical_product_name, price) if found, else None.
+
+    Two-stage lookup with defense-in-depth:
+    1. Fuzzy match against the in-memory cache to resolve a candidate
+       ``normalized_name`` (scoped to *client_id*).
+    2. Re-fetch that row from the ``products`` table filtered by
+       ``client_id`` and the matched ``normalized_name``, and return the
+       **DB** values (source of truth). If the cache hit but the DB row is
+       gone (deleted since the cache was warmed) or the price was changed,
+       the DB wins; a pure cache miss (no DB row) is treated as "not found"
+       and logged as a cache/DB divergence signal.
+    """
     match = find_best_match(client_id, item_name, threshold)
     if match is None:
         return None
     matched_key, _score = match
 
-    entry = _cache.get(client_id)
-    if not entry:
-        return None
-    price = entry.prices.get(matched_key)
-    if price is None:
+    # Defense-in-depth: the cache is only a fuzzy index; the DB is the
+    # source of truth. Re-verify against products scoped to this tenant.
+    stmt = select(Product.item_name, Product.price).where(
+        Product.client_id == client_id,
+        Product.normalized_name == matched_key,
+    )
+    result = await db.execute(stmt)
+    row = result.first()
+    if row is None:
+        # Cache said "match" but DB says "no such product for this client"
+        # — stale cache (deleted/replaced catalog). Treat as not found and
+        # log the divergence for observability.
+        logger.info(
+            "price lookup cache/DB divergence: cache hit but no DB row",
+            extra={"client_id": client_id, "matched_key": matched_key},
+        )
         return None
 
-    canonical_name = entry.canonical_names.get(matched_key, matched_key)
-    return canonical_name, price
+    return row.item_name, row.price

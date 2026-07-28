@@ -214,7 +214,7 @@ async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
         logger.info("intent matched", extra={"intent": intent, "text": user_text})
 
         if intent == "PRICE":
-            reply = _handle_price_intent(client_id, normalized_text)
+            reply = await _handle_price_intent(db, client_id, normalized_text)
         elif intent == "WARRANTY":
             reply = settings.WARRANTY_MESSAGE
         elif intent == "SUPPORT":
@@ -237,7 +237,9 @@ async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
 # ---------------------------------------------------------------------------
 # Price-intent handler (extracted for readability)
 # ---------------------------------------------------------------------------
-def _handle_price_intent(client_id: int, normalized_text: str) -> str:
+async def _handle_price_intent(
+    db: AsyncSession, client_id: int, normalized_text: str
+) -> str:
     """Build the reply for a PRICE intent, scoped to *client_id*."""
     product_name = _extract_product_name(normalized_text)
 
@@ -262,7 +264,7 @@ def _handle_price_intent(client_id: int, normalized_text: str) -> str:
         return reply
 
     # 2. Fuzzy matching
-    result = get_price(client_id, product_name)
+    result = await get_price(db, client_id, product_name)
     if result is not None:
         db_product_name, price = result
         return f"قیمت {db_product_name}: {price:,} تومان"
@@ -276,7 +278,7 @@ def _handle_price_intent(client_id: int, normalized_text: str) -> str:
     if candidates:
         canonical_candidates = []
         for name in candidates:
-            resolved = get_price(client_id, name, threshold=0.0)
+            resolved = await get_price(db, client_id, name, threshold=0.0)
             if resolved is not None:
                 canonical_candidates.append(resolved[0])
 

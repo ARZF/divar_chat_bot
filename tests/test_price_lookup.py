@@ -11,11 +11,20 @@ os.environ.setdefault("DIVAR_CLIENT_SECRET", "test_client_secret")
 os.environ.setdefault("DIVAR_REDIRECT_URI", "https://example.com/callback")
 
 import pytest
+import pytest_asyncio
 from io import BytesIO
 
 import pandas as pd
 from openpyxl import Workbook
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.pool import StaticPool
 
+from models.base import Base
+from models.product import Product
 from services import price_lookup as pl
 from services.price_lookup import (
     normalize_text,
@@ -65,6 +74,55 @@ def empty_catalog():
     pl._cache.pop(CID, None)
     yield
     pl._cache.pop(CID, None)
+
+
+# ---------------------------------------------------------------------------
+# Async DB fixtures (real in-memory SQLite — matches tests/test_auth.py pattern)
+# Only the products table is created; the full model set uses Postgres JSONB
+# that SQLite cannot represent, but get_price's re-fetch only touches products.
+# ---------------------------------------------------------------------------
+@pytest_asyncio.fixture
+async def engine():
+    eng = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    async with eng.begin() as conn:
+        await conn.run_sync(
+            lambda c: Base.metadata.create_all(c, tables=[Product.__table__])
+        )
+    yield eng
+    await eng.dispose()
+
+
+@pytest_asyncio.fixture
+async def session_factory(engine):
+    return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+@pytest_asyncio.fixture
+async def db(session_factory):
+    """An async session for get_price's defense-in-depth re-fetch."""
+    async with session_factory() as session:
+        yield session
+
+
+@pytest_asyncio.fixture
+async def seeded_db(db, catalog):
+    """Seed the products table to match the in-memory `catalog` fixture so
+    cache and DB agree — the normal (non-divergent) path."""
+    for normalized_name, (canonical, price) in CATALOG.items():
+        db.add(
+            Product(
+                client_id=CID,
+                item_name=canonical,
+                normalized_name=normalized_name,
+                price=price,
+            )
+        )
+    await db.commit()
+    yield db
 
 
 def make_excel(rows, headers=("product", "price")):
@@ -312,28 +370,68 @@ class TestGetAllMatchingPrices:
 
 
 class TestGetPrice:
-    def test_exact_match_returns_canonical_name_and_price(self, catalog):
-        result = get_price(CID, "iPhone 13")
+    @pytest.mark.asyncio
+    async def test_exact_match_returns_canonical_name_and_price(self, seeded_db):
+        result = await get_price(seeded_db, CID, "iPhone 13")
         assert result is not None
         canonical, price = result
         assert canonical == "iPhone 13"
         assert price == 35000000
 
-    def test_fuzzy_match_typo(self, catalog):
-        result = get_price(CID, "samsng galaxy s22")
+    @pytest.mark.asyncio
+    async def test_fuzzy_match_typo(self, seeded_db):
+        result = await get_price(seeded_db, CID, "samsng galaxy s22")
         assert result is not None
         canonical, price = result
         assert canonical == "Samsung Galaxy S22"
         assert price == 28000000
 
-    def test_no_match_returns_none(self, catalog):
-        assert get_price(CID, "zzzzzzzzz") is None
+    @pytest.mark.asyncio
+    async def test_no_match_returns_none(self, seeded_db):
+        assert await get_price(seeded_db, CID, "zzzzzzzzz") is None
 
-    def test_empty_query_returns_none(self, catalog):
-        assert get_price(CID, "") is None
+    @pytest.mark.asyncio
+    async def test_empty_query_returns_none(self, seeded_db):
+        assert await get_price(seeded_db, CID, "") is None
 
-    def test_empty_catalog_returns_none(self, empty_catalog):
-        assert get_price(CID, "iphone 13") is None
+    @pytest.mark.asyncio
+    async def test_empty_catalog_returns_none(self, empty_catalog, db):
+        # No cache entry AND no DB rows → None
+        assert await get_price(db, CID, "iphone 13") is None
+
+    @pytest.mark.asyncio
+    async def test_db_price_wins_over_stale_cache(self, catalog, seeded_db):
+        """Defense-in-depth: if the cache holds an old price but the DB row
+        was updated, get_price must return the DB (authoritative) price."""
+        from sqlalchemy import update
+
+        await seeded_db.execute(
+            update(Product)
+            .where(Product.client_id == CID, Product.normalized_name == "iphone 13")
+            .values(price=99_999_999)
+        )
+        await seeded_db.commit()
+
+        result = await get_price(seeded_db, CID, "iPhone 13")
+        assert result is not None
+        _, price = result
+        assert price == 99_999_999  # DB value, not the stale cache value (35000000)
+
+    @pytest.mark.asyncio
+    async def test_deleted_db_row_returns_none(self, catalog, seeded_db):
+        """Cache/DB divergence: cache says "match" but the product row was
+        deleted since the cache was warmed → treat as not found (None)."""
+        from sqlalchemy import delete as sa_delete
+
+        await seeded_db.execute(
+            sa_delete(Product).where(
+                Product.client_id == CID, Product.normalized_name == "iphone 13"
+            )
+        )
+        await seeded_db.commit()
+
+        # Cache still has "iphone 13", DB no longer does
+        assert await get_price(seeded_db, CID, "iPhone 13") is None
 
 
 # ---------------------------------------------------------------------------
@@ -346,19 +444,21 @@ class TestThreeTierLookup:
         results = get_all_matching_prices(CID, "iphone")
         assert len(results) >= 1
 
-    def test_tier2_fuzzy_match_when_substring_fails(self, catalog):
+    @pytest.mark.asyncio
+    async def test_tier2_fuzzy_match_when_substring_fails(self, catalog, seeded_db):
         assert get_all_matching_prices(CID, "samsng galaxy s22") == []
 
-        result = get_price(CID, "samsng galaxy s22")
+        result = await get_price(seeded_db, CID, "samsng galaxy s22")
         assert result is not None
         assert result[0] == "Samsung Galaxy S22"
 
-    def test_tier3_suggestions_when_fuzzy_below_threshold(self, catalog):
+    @pytest.mark.asyncio
+    async def test_tier3_suggestions_when_fuzzy_below_threshold(self, catalog, seeded_db):
         garbled = "galx"
 
         assert get_all_matching_prices(CID, garbled) == []
 
-        tier2_result = get_price(CID, garbled)
+        tier2_result = await get_price(seeded_db, CID, garbled)
 
         if tier2_result is None:
             suggestions = find_top_matches(CID, garbled, limit=3)
