@@ -237,13 +237,31 @@ is that the *existing* test suite runs successfully with the new setup.
 
 ## Done criteria
 
-- [ ] `requirements.txt` declares `pytest`, `pytest-asyncio`, `pytest-mock`, `aiosqlite`
-- [ ] `pytest.ini` exists with `asyncio_mode = auto`
-- [ ] `conftest.py` exists with all 12 env vars set
-- [ ] `pytest` (no args) exits 0 and all existing tests pass
-- [ ] `pytest tests/test_auth.py` exits 0 (verifies async fixtures work)
-- [ ] No files outside the in-scope list are modified (`git status`)
-- [ ] `advisor-plans/README.md` row 001 status updated to DONE
+- [x] `requirements.txt` declares `pytest`, `pytest-asyncio`, `pytest-mock`, `aiosqlite`
+- [x] `pytest.ini` exists with `asyncio_mode = auto`
+- [x] `conftest.py` exists with all 12 env vars set
+- [x] `pytest` (no args) exits 0 and all existing tests pass
+- [x] `pytest tests/test_auth.py` exits 0 (verifies async fixtures work)
+- [x] No files outside the in-scope list are modified (`git status`)
+- [x] `advisor-plans/README.md` row 001 status updated to DONE
+
+## Execution record (2026-07-28)
+
+Completed. Deviations from the plan as written, all deliberate:
+
+- **Versions pinned higher than planned**: `pytest==9.1.1`, `pytest-asyncio==1.4.0`,
+  `pytest-mock==3.15.1` (plan proposed 8.3.4 / 0.24.0 / 3.14.0). `aiosqlite==0.20.0`
+  as planned. All 95 tests pass on these versions, and they also eliminate ~5000
+  `asyncio.get_event_loop_policy` DeprecationWarnings emitted by pytest-asyncio 0.24.
+- **conftest.py env-var list adjusted for drift**: `admin_token` was dropped
+  (plan 005 removed the setting) and `CORS_ALLOWED_ORIGINS` added (plan 002), so
+  conftest sets the 12 vars `config.py` actually requires today — not the plan's list.
+- **Test suite grew**: `tests/test_chatbot.py` and `tests/test_oauth.py` were added
+  after this plan was written, so the baseline is 95 tests across 6 files, not
+  "~50+ across 4".
+- **Interpreter**: deps installed into the project `.venv`, not global Python
+  (the global 3.14 install lacks httpx/sqlalchemy/pandas). Run tests via
+  `.venv\Scripts\python.exe -m pytest`.
 
 ## STOP conditions
 
