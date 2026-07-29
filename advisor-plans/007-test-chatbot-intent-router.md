@@ -201,14 +201,32 @@ pytest
 
 ## Done criteria
 
-- [ ] `tests/test_chatbot.py` exists and imports from `services.chatbot`
-- [ ] `parse_start_message` covered (all 5 touchpoints, bare, unknown, empty, whitespace)
-- [ ] `_match_intent`, `_is_pure_greeting`, `_extract_product_name` each covered
-- [ ] `_handle_price_intent` covered for prompt / single-match / not-found
-- [ ] Price-cache fixture seeds and tears down `services.price_lookup._cache[CID]`
-- [ ] `pytest tests/test_chatbot.py` passes; `pytest` (full) exits 0
-- [ ] No source files (only the new test file) modified (`git status`)
-- [ ] `advisor-plans/README.md` row 007 status updated
+- [x] `tests/test_chatbot.py` exists and imports from `services.chatbot`
+- [x] `parse_start_message` covered (all 5 touchpoints, bare, unknown, empty, whitespace)
+- [x] `_match_intent`, `_is_pure_greeting`, `_extract_product_name` each covered
+- [x] `_handle_price_intent` covered for prompt / single-match / not-found (plus bulk-list)
+- [x] Price-cache fixture seeds and tears down `services.price_lookup._cache[CID]`
+- [x] `pytest tests/test_chatbot.py` passes (32); `pytest` (full) exits 0 (120 passed)
+- [x] No source files modified — only `tests/test_chatbot.py` + this plan's README row (`git status`)
+- [x] `advisor-plans/README.md` row 007 status updated
+
+**Executed 2026-07-29** on branch `advisor/007-chatbot-tests`. Deviations from the
+plan as written, both forced by drift since `f5abbbc`:
+
+1. `tests/test_chatbot.py` **already existed** (216 lines, covering
+   `parse_start_message` + `_resolve_new_conversation` + `_lookup_conversation`),
+   so this was an *append*, not a create. The monolithic
+   `test_parse_start_message_supports_all_touchpoints` was replaced by the
+   `TestParseStartMessage` class, which is a strict superset of its asserts.
+2. `_handle_price_intent` is now **async** with signature
+   `(db, client_id, normalized_text)` — `db` was added and `get_price` is awaited
+   with it. Tests were written against the live signature; `services/chatbot.py`
+   was **not** modified (per STOP conditions).
+
+Also removed the 14-line inline `os.environ.setdefault` block that plan 001's
+`conftest.py` rendered redundant, and added `Product.__table__` to the existing
+SQLite `session_factory` fixture instead of standing up a second engine.
+No real bugs surfaced in the router.
 
 ## STOP conditions
 

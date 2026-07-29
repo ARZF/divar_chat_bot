@@ -1,18 +1,4 @@
-import os
-
-# Set required settings before importing application modules.
-os.environ.setdefault("DIVAR_API_KEY", "test_api_key")
-os.environ.setdefault("DIVAR_ACCESS_TOKEN", "test_access_token")
-os.environ.setdefault("DIVAR_REFRESH_TOKEN", "test_refresh_token")
-os.environ.setdefault("DIVAR_WEBHOOK_SECRET", "test_webhook_secret")
-os.environ.setdefault("DIVAR_IDENTIFICATION_KEY", "test_identification_key")
-os.environ.setdefault("DIVAR_APP_SLUG", "test_app_slug")
-os.environ.setdefault("DIVAR_CLIENT_SECRET", "test_client_secret")
-os.environ.setdefault("DIVAR_REDIRECT_URI", "https://example.com/callback")
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
-os.environ.setdefault("JWT_SECRET_KEY", "test_jwt_secret_key")
-os.environ.setdefault("OTP_HMAC_KEY", "test_otp_hmac_key")
-
+# Env vars for config.py are set by the root conftest.py before collection.
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
@@ -22,10 +8,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.pool import StaticPool
 
+from config import settings
 from models.client import Client
 from models.conversation import Conversation
 from models.post import Post
+from models.product import Product
 import services.chatbot as chatbot
+import services.price_lookup as pl
+from services.price_lookup import normalize_text
+
+# Test client_id used by the price-cache fixture (mirrors tests/test_price_lookup.py)
+CID = 1
 
 
 @compiles(JSONB, "sqlite")
@@ -60,7 +53,12 @@ async def session_factory():
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    tables = [Client.__table__, Post.__table__, Conversation.__table__]
+    tables = [
+        Client.__table__,
+        Post.__table__,
+        Conversation.__table__,
+        Product.__table__,
+    ]
     async with engine.begin() as connection:
         await connection.run_sync(
             lambda sync_connection: Client.metadata.create_all(
@@ -99,23 +97,56 @@ def sqlite_upsert(monkeypatch):
     )
 
 
-@pytest.mark.asyncio
-async def test_parse_start_message_supports_all_touchpoints():
-    assert chatbot.parse_start_message("/start MY_POST token-1") == (
-        "MY_POST",
-        "token-1",
+@pytest.fixture
+def catalog():
+    """Seed the per-client price cache, then always tear it down.
+
+    CID is shared with tests/test_price_lookup.py, so the pop is mandatory —
+    a leaked entry would silently change that module's expectations.
+    """
+    pl._cache[CID] = pl.ClientPriceCache(
+        prices={"iphone 13": 35000000, "iphone 14": 42000000},
+        canonical_names={"iphone 13": "iPhone 13", "iphone 14": "iPhone 14"},
+        product_names=["iphone 13", "iphone 14"],
     )
-    assert chatbot.parse_start_message("/start MY_DIVAR") == ("MY_DIVAR", None)
-    assert chatbot.parse_start_message("/start DIVAR_PRO") == ("DIVAR_PRO", None)
-    assert chatbot.parse_start_message("/start CHAT conversation-1") == (
-        "CHAT",
-        "conversation-1",
-    )
-    assert chatbot.parse_start_message("/start DEMAND_POST token-2") == (
-        "DEMAND_POST",
-        "token-2",
-    )
-    assert chatbot.parse_start_message("price iphone") is None
+    yield
+    pl._cache.pop(CID, None)
+
+
+class TestParseStartMessage:
+    def test_my_post_with_token(self):
+        assert chatbot.parse_start_message("/start MY_POST tok123") == (
+            "MY_POST",
+            "tok123",
+        )
+
+    def test_demand_post_with_token(self):
+        assert chatbot.parse_start_message("/start DEMAND_POST tok456") == (
+            "DEMAND_POST",
+            "tok456",
+        )
+
+    def test_chat_with_token(self):
+        assert chatbot.parse_start_message("/start CHAT convid") == ("CHAT", "convid")
+
+    def test_bare_my_divar_has_no_token(self):
+        assert chatbot.parse_start_message("/start MY_DIVAR") == ("MY_DIVAR", None)
+
+    def test_bare_divar_pro_has_no_token(self):
+        assert chatbot.parse_start_message("/start DIVAR_PRO") == ("DIVAR_PRO", None)
+
+    def test_unknown_touchpoint_returns_none(self):
+        assert chatbot.parse_start_message("/start BOGUS x") is None
+
+    def test_non_start_text_returns_none(self):
+        assert chatbot.parse_start_message("hello") is None
+        assert chatbot.parse_start_message("price iphone") is None
+
+    def test_empty_string_returns_none(self):
+        assert chatbot.parse_start_message("") is None
+
+    def test_surrounding_whitespace_is_stripped(self):
+        assert chatbot.parse_start_message("  /start MY_DIVAR  ") == ("MY_DIVAR", None)
 
 
 @pytest.mark.asyncio
@@ -214,3 +245,94 @@ async def test_subsequent_message_uses_existing_conversation(db, seeded_post):
 
     assert loaded is not None
     assert loaded.client_id == client.id
+
+
+# ---------------------------------------------------------------------------
+# Intent router helpers — all receive text already run through normalize_text,
+# so the tests normalize first to mirror handle_bot_reply's real call path.
+# ---------------------------------------------------------------------------
+class TestMatchIntent:
+    def test_persian_price_keyword(self):
+        assert chatbot._match_intent(normalize_text("قیمت آیفون")) == "PRICE"
+
+    def test_english_price_keyword(self):
+        assert chatbot._match_intent(normalize_text("price iphone")) == "PRICE"
+
+    def test_warranty_keyword(self):
+        assert chatbot._match_intent(normalize_text("گارانتی")) == "WARRANTY"
+
+    def test_support_keyword(self):
+        assert chatbot._match_intent(normalize_text("پشتیبانی")) == "SUPPORT"
+
+    def test_greeting_has_no_intent(self):
+        assert chatbot._match_intent(normalize_text("سلام")) is None
+
+    def test_empty_text_has_no_intent(self):
+        assert chatbot._match_intent("") is None
+
+
+class TestIsPureGreeting:
+    def test_persian_greeting(self):
+        assert chatbot._is_pure_greeting(normalize_text("سلام")) is True
+
+    def test_english_greeting(self):
+        assert chatbot._is_pure_greeting(normalize_text("hi")) is True
+
+    def test_greeting_plus_intent_is_not_pure(self):
+        assert chatbot._is_pure_greeting(normalize_text("سلام قیمت")) is False
+
+    def test_empty_text_is_not_a_greeting(self):
+        assert chatbot._is_pure_greeting("") is False
+
+
+class TestExtractProductName:
+    def test_price_keyword_is_stripped(self):
+        result = chatbot._extract_product_name(normalize_text("قیمت آیفون ۱۳"))
+        assert "قیمت" not in result
+        # normalize_text transliterates آیفون -> iphone and ۱۳ -> 13
+        assert result.split() == ["iphone", "13"]
+
+    def test_keyword_only_leaves_nothing(self):
+        assert chatbot._extract_product_name(normalize_text("قیمت")) == ""
+
+    def test_filtered_filler_words_are_stripped(self):
+        result = chatbot._extract_product_name(normalize_text("سلام قیمت iphone چنده"))
+        assert result.split() == ["iphone"]
+
+
+# ---------------------------------------------------------------------------
+# _handle_price_intent — signature is (db, client_id, normalized_text)
+# ---------------------------------------------------------------------------
+class TestHandlePriceIntent:
+    @pytest.mark.asyncio
+    async def test_no_product_name_returns_prompt(self, db, catalog):
+        reply = await chatbot._handle_price_intent(db, CID, normalize_text("قیمت"))
+        assert reply == settings.PRICE_PROMPT_MESSAGE
+
+    @pytest.mark.asyncio
+    async def test_single_substring_match_reports_canonical_name_and_price(
+        self, db, catalog
+    ):
+        reply = await chatbot._handle_price_intent(
+            db, CID, normalize_text("قیمت iphone 13")
+        )
+        assert "iPhone 13" in reply
+        assert "35,000,000" in reply
+
+    @pytest.mark.asyncio
+    async def test_multiple_substring_matches_return_bulk_list(self, db, catalog):
+        reply = await chatbot._handle_price_intent(
+            db, CID, normalize_text("قیمت iphone")
+        )
+        assert "iPhone 13" in reply
+        assert "iPhone 14" in reply
+        assert "42,000,000" in reply
+
+    @pytest.mark.asyncio
+    async def test_unknown_product_returns_not_found(self, db, catalog):
+        # "zzzzzzzzz" scores far below SUGGESTION_MIN_SCORE against the catalog,
+        # so the substring, fuzzy and suggestion tiers all miss deterministically.
+        reply = await chatbot._handle_price_intent(
+            db, CID, normalize_text("قیمت zzzzzzzzz")
+        )
+        assert reply == settings.PRICE_NOT_FOUND_MESSAGE
