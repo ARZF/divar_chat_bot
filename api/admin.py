@@ -39,9 +39,8 @@ async def upload_prices(
     try:
         rows_loaded = await price_lookup.load_prices_to_db(db, client_id, df)
     except AttributeError as e:
-        # `_parse_df` uses itertuples() attribute access, so a missing "price"
-        # or "product" column raises AttributeError (not KeyError) — confirmed
-        # 2026-07-21. Surface it as a clean 400 instead of a raw 500.
+        # `_parse_df` uses itertuples() attribute access,
+        #   which raises AttributeError if a required column is missing.
         raise HTTPException(
             status_code=400,
             detail=f"Invalid file format. Missing required column: {e}",
