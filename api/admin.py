@@ -38,12 +38,10 @@ async def upload_prices(
     df = pd.read_excel(io.BytesIO(contents))
     try:
         rows_loaded = await price_lookup.load_prices_to_db(db, client_id, df)
-    except AttributeError as e:
-        # `_parse_df` uses itertuples() attribute access,
-        #   which raises AttributeError if a required column is missing.
+    except ValueError as e:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid file format. Missing required column: {e}",
+            detail=f"Invalid file format. {e}",
         ) from e
 
     return UploadPricesResponse(

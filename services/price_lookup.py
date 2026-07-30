@@ -158,7 +158,12 @@ async def load_prices_to_db(
 
     Returns the number of rows inserted.
     """
-    parsed_prices, parsed_canonical = _parse_df(df)
+    try:
+        parsed_prices, parsed_canonical = _parse_df(df)
+    except AttributeError as e:
+        raise ValueError(
+            f"Missing required column: {e}"
+        ) from e
 
     # Scoped delete — only this client's products
     await db.execute(
