@@ -1,4 +1,7 @@
 # Env vars for config.py are set by the root conftest.py before collection.
+import inspect
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
@@ -336,3 +339,89 @@ class TestHandlePriceIntent:
             db, CID, normalize_text("قیمت zzzzzzzzz")
         )
         assert reply == settings.PRICE_NOT_FOUND_MESSAGE
+
+
+# ---------------------------------------------------------------------------
+# Background-task session lifetime (PHASE2 §2.5)
+#
+# handle_bot_reply runs as a FastAPI BackgroundTask, so the request's
+# Depends(get_db) session may already be closed by the time it runs. It must
+# therefore take no session parameter and open its own via AsyncSessionLocal.
+# ---------------------------------------------------------------------------
+class _TrackedSessionContext:
+    """Delegates to a real session context manager, recording enter/exit.
+
+    Lets the test assert `async with` was used (not a bare call or a manually
+    managed session) while handle_bot_reply still gets a working session.
+    """
+
+    def __init__(self, factory):
+        self._context = factory()
+        self.aenter_calls = 0
+        self.aexit_calls = 0
+
+    async def __aenter__(self):
+        self.aenter_calls += 1
+        return await self._context.__aenter__()
+
+    async def __aexit__(self, *exc_info):
+        self.aexit_calls += 1
+        return await self._context.__aexit__(*exc_info)
+
+
+def test_handle_bot_reply_takes_no_session_parameter():
+    """Guard: the Phase 1 signature must stay (conversation_id, user_text).
+
+    Fails loudly if a request-scoped `db`/`session` param is ever added — that
+    session is not guaranteed open when the background task runs.
+    """
+    parameters = list(inspect.signature(chatbot.handle_bot_reply).parameters)
+    assert parameters == ["conversation_id", "user_text"]
+
+
+@pytest.mark.asyncio
+async def test_handle_bot_reply_opens_its_own_session(
+    monkeypatch, session_factory, seeded_post, sqlite_upsert, catalog
+):
+    """handle_bot_reply must open its own session via `async with`.
+
+    Driven through the real /start resolution path. `catalog` is required for
+    its teardown: the seeded client is client_id 1 (== CID) in a fresh
+    in-memory DB, and a pre-seeded cache entry both skips the lazy warm and
+    guarantees the entry is popped afterwards.
+    """
+    client, post = seeded_post
+
+    # chatbot.py does `from db.session import AsyncSessionLocal`, so the name
+    # must be patched on the chatbot module, not on db.session.
+    tracked_context = _TrackedSessionContext(session_factory)
+    mock_session_local = MagicMock(return_value=tracked_context)
+    monkeypatch.setattr(chatbot, "AsyncSessionLocal", mock_session_local)
+
+    send_message = AsyncMock(return_value=True)
+    monkeypatch.setattr(chatbot.divar_service, "send_message", send_message)
+
+    await chatbot.handle_bot_reply(
+        "conversation-lifetime-test", f"/start MY_POST {post.post_token}"
+    )
+
+    # Opened its own session, with no arguments, exactly once...
+    mock_session_local.assert_called_once_with()
+    # ...and as an async context manager, so it is always closed.
+    assert tracked_context.aenter_calls == 1
+    assert tracked_context.aexit_calls == 1
+
+    # The session was real and usable: resolution actually persisted a row.
+    async with session_factory() as verify_session:
+        conversation = (
+            await verify_session.execute(
+                select(Conversation).where(
+                    Conversation.divar_conversation_id == "conversation-lifetime-test"
+                )
+            )
+        ).scalar_one()
+    assert conversation.client_id == client.id
+
+    # No real HTTP call happened; the welcome reply went out on the new conversation.
+    sent_texts = [call.args[1] for call in send_message.await_args_list]
+    assert settings.WELCOME_MESSAGE in sent_texts
