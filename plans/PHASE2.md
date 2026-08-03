@@ -433,10 +433,10 @@ chat-sending permission, since chat-sending needs no OAuth at all:**
 >         ...
 > ```
 
-- [ ] `handle_bot_reply` keeps its current Phase 1 signature `(conversation_id, user_text)`
+- [x] `handle_bot_reply` keeps its current Phase 1 signature `(conversation_id, user_text)`
       — opens its own DB session internally rather than receiving one as a parameter.
       `client_id` is resolved inside from the DB (via 2.1), not passed from the webhook URL.
-- [ ] Inside, it now: resolves/loads the conversation's `client_id` per section 2.1, sets
+- [x] Inside, it now: resolves/loads the conversation's `client_id` per section 2.1, sets
       `client_id_var` for logging context, runs price lookup scoped per section 2.4, and
       calls the reworked `divar.py` functions (which use the global API key, not per-client
       tokens — see 2.3 correction)

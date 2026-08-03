@@ -4,6 +4,53 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-08-03** — Marked PHASE2.md **§2.5 (Background Task / Session Lifetime)** as done.
+  **It was completed as a side effect of implementing 2.1 and 2.4, not as a separate pass** —
+  which is why both boxes stayed `[ ]` long after the code had actually landed. Audit
+  evidence for each item:
+  - `services/chatbot.py`:
+    `async def handle_bot_reply(conversation_id: str, user_text: str) -> None` — Phase 1
+    signature unchanged, no `db`/session parameter; it opens its own session via
+    `async with AsyncSessionLocal() as db:`, exactly as §2.5's NOTE prescribes.
+  - `api/webhook.py`:
+    `background_tasks.add_task(handle_bot_reply, conversation_id, user_text)` — no session
+    and no `client_id` handed in from the request.
+  - `client_id` is resolved *inside* the task via 2.1's `_lookup_conversation` /
+    `_resolve_new_conversation` (`posts` → `conversations`), including the unresolved →
+    `UNRESOLVED_CLIENT_MESSAGE` persist-nothing branch.
+  - Logging context: `client_id_var.set(str(client_id))` (plus `conversation_id_var`).
+  - Price lookup scoped per 2.4 via `_handle_price_intent(db, client_id, ...)`;
+    `divar_service.send_message(conversation_id, text)` keeps its Phase 1 two-arg,
+    global-API-key form per the 2.3 correction.
+
+  The one genuine gap was **test coverage, not code** — nothing would have failed if
+  someone reintroduced a request-scoped session parameter, since `tests/test_webhook.py`
+  mocks `handle_bot_reply` wholesale and `tests/test_chatbot.py` only exercised the
+  helpers. Closed with two tests in `tests/test_chatbot.py`, reusing the existing
+  `session_factory` / `seeded_post` / `sqlite_upsert` / `catalog` fixtures:
+  1. `test_handle_bot_reply_takes_no_session_parameter` — signature guard via
+     `inspect.signature`, asserting the params are exactly
+     `["conversation_id", "user_text"]`.
+  2. `test_handle_bot_reply_opens_its_own_session` — patches `chatbot.AsyncSessionLocal`
+     (the name must be patched on the `chatbot` module, since `chatbot.py` does
+     `from db.session import AsyncSessionLocal`) with a mock wrapping the real
+     `session_factory`, driven through the actual `/start MY_POST` resolution path with
+     `chatbot.divar_service.send_message` mocked. Asserts `AsyncSessionLocal` is called
+     once with no args and used as an `async with` context manager (both `__aenter__` and
+     `__aexit__` fire, so the session is always closed), and that the session was real —
+     the resolved `conversations` row is verifiable from a separate session.
+
+  No webhook-level test was added for the `add_task` call signature; that is already
+  covered by `tests/test_webhook.py::test_valid_auth_and_payload_schedules_background_task`.
+  `tests/test_chatbot.py`: 34 passed; full suite: 122 passed.
+
+  Also recorded (deliberately **not** changed) the one known seam noticed during this
+  audit: `handle_bot_reply` does a function-body
+  `from services.price_lookup import _cache` to check `if client_id not in _cache` before
+  the lazy warm — a reach into another module's private global. Logged under
+  `CHECKLISTS.md`'s Future Improvements rather than refactored, since it works and 2.4's
+  cache shape is settled.
+
 - **2026-07-28** — Closed the two remaining `[ ]` gaps in PHASE2.md §2.4 (the other
   2.4 items were already `[x]` and left untouched):
   1. **Startup cache warming:** `main.py`'s lifespan now calls

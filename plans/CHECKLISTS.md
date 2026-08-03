@@ -94,6 +94,22 @@
 - [ ] Add authentication metrics (OTP requests, verification success rate, OAuth login success rate, refresh usage, SMS failures).
 - [ ] Add monitoring and alerting for abnormal authentication failure rates.
 
+### Price Cache Seams
+
+- [ ] `services/chatbot.py`'s `handle_bot_reply` reaches into another module's private
+      global: a function-body `from services.price_lookup import _cache`, used for the
+      `if client_id not in _cache` check that guards the lazy `refresh_lookup_cache` warm.
+      Noted during the 2026-08-03 §2.5 audit and **deliberately left as-is** — it works,
+      and 2.4's cache shape is settled (see PHASE2.md §2.4). If it's ever cleaned up, the
+      lazy path should ask `price_lookup` whether a client is warmed (e.g. a small
+      `is_warmed(client_id)` / "refresh if missing" helper) rather than importing `_cache`,
+      so the cache shape stays private to that module.
+- [ ] `get_all_matching_prices` and `find_top_matches` still read the in-memory cache with
+      no DB re-fetch, unlike `get_price` (2026-07-28). Same staleness exposure: stale price,
+      since-deleted product. See PHASE2.md §2.4's "Known residual" note. Startup warming +
+      lazy refresh-on-miss narrow the window; revisit if substring-path staleness becomes a
+      real concern.
+
 ### Config Cleanup
 
 - [ ] Remove the now-dead `admin_token` field from `Settings` (`config.py`) and from
