@@ -86,3 +86,6 @@ celerybeat.pid
 # Other
 *.pem
 *.key
+
+# Codebase Memory MCP (live index lives in ~/.codebase-memory/)
+.codebase-memory/
