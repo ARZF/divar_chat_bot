@@ -19,6 +19,7 @@ from models.product import Product
 import services.chatbot as chatbot
 import services.price_lookup as pl
 from services.price_lookup import normalize_text
+from services.state_machine import ConversationState
 
 # Test client_id used by the price-cache fixture (mirrors tests/test_price_lookup.py)
 CID = 1
@@ -248,6 +249,28 @@ async def test_subsequent_message_uses_existing_conversation(db, seeded_post):
 
     assert loaded is not None
     assert loaded.client_id == client.id
+
+
+@pytest.mark.asyncio
+async def test_persisted_state_parses_back_into_the_enum(
+    db, seeded_post, sqlite_upsert
+):
+    """Whatever gets written must round-trip through ConversationState.
+
+    Guards the casing mismatch: a lowercase enum against an uppercase stored
+    literal raises ValueError here, before any state-machine wiring exists.
+    """
+    _, post = seeded_post
+
+    await chatbot._resolve_new_conversation(
+        db,
+        "conversation-state-roundtrip",
+        f"/start MY_POST {post.post_token}",
+    )
+
+    loaded = await chatbot._lookup_conversation(db, "conversation-state-roundtrip")
+
+    assert ConversationState(loaded.current_state) is ConversationState.START
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from models.base import Base
+from services.state_machine import ConversationState
 
 if TYPE_CHECKING:
     from models.client import Client
@@ -31,7 +32,11 @@ class Conversation(Base):
         index=True,
     )
     divar_conversation_id: Mapped[str] = mapped_column(String(255))
-    current_state: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    current_state: Mapped[str] = mapped_column(
+    String(50),
+    default=ConversationState.START.value,
+    nullable=False,
+    )
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", JSONB, nullable=True
     )
