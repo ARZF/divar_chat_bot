@@ -1,11 +1,11 @@
 {
-    "schema_version": 1,
-    "commit": "",
-    "indexed_at": "2026-07-08T13:58:50Z",
+    "schema_version": 2,
+    "commit": "7108877a0d303ad25dd43f7049af27f64d574ebf",
+    "indexed_at": "2026-08-09T21:31:02Z",
     "project": "D-code-divar_chat_bot",
-    "nodes": 1076,
-    "edges": 1763,
-    "original_size": 2490368,
-    "compressed_size": 360570,
-    "compression_level": 9
+    "nodes": 1505,
+    "edges": 3493,
+    "original_size": 4849664,
+    "compressed_size": 734787,
+    "compression_level": 3
 }
