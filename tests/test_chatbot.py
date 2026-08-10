@@ -19,7 +19,7 @@ from models.product import Product
 import services.chatbot as chatbot
 import services.price_lookup as pl
 from services.price_lookup import normalize_text
-from services.state_machine import ConversationState
+from services.state_machine import INTENT_EVENTS, ConversationState, transition
 
 # Test client_id used by the price-cache fixture (mirrors tests/test_price_lookup.py)
 CID = 1
@@ -160,13 +160,14 @@ async def test_start_post_touchpoints_resolve_to_seeded_client(
 ):
     client, post = seeded_post
 
-    resolved_client_id = await chatbot._resolve_new_conversation(
+    conv = await chatbot._resolve_new_conversation(
         db,
         "conversation-resolved",
         f"/start {touchpoint} {post.post_token}",
     )
 
-    assert resolved_client_id == client.id
+    assert conv is not None
+    assert conv.client_id == client.id
     conversation = (
         await db.execute(
             select(Conversation).where(
@@ -448,3 +449,158 @@ async def test_handle_bot_reply_opens_its_own_session(
     # No real HTTP call happened; the welcome reply went out on the new conversation.
     sent_texts = [call.args[1] for call in send_message.await_args_list]
     assert settings.WELCOME_MESSAGE in sent_texts
+
+
+# ---------------------------------------------------------------------------
+# State machine (2.6) — transition table, then the wiring in handle_bot_reply
+# ---------------------------------------------------------------------------
+class TestTransitionTable:
+    """Pure unit tests — no DB, no session."""
+
+    def test_auto_advance_edge_leaves_start(self):
+        assert (
+            transition(ConversationState.START, "menu") is ConversationState.MAIN_MENU
+        )
+
+    def test_price_enters_price_menu(self):
+        assert (
+            transition(ConversationState.MAIN_MENU, "price")
+            is ConversationState.PRICE_MENU
+        )
+
+    def test_service_enters_service_menu(self):
+        assert (
+            transition(ConversationState.MAIN_MENU, "service")
+            is ConversationState.SERVICE_MENU
+        )
+
+    def test_human_returns_to_main_menu_not_human_support(self):
+        """No persistent human-support mode this phase."""
+        assert (
+            transition(ConversationState.MAIN_MENU, "human")
+            is ConversationState.MAIN_MENU
+        )
+
+    @pytest.mark.parametrize(
+        "state", [ConversationState.PRICE_MENU, ConversationState.SERVICE_MENU]
+    )
+    def test_menu_states_are_not_sticky(self, state):
+        """Intents route out of a menu, rather than being swallowed."""
+        assert transition(state, "menu") is ConversationState.MAIN_MENU
+        assert transition(state, "human") is ConversationState.MAIN_MENU
+        assert transition(state, "service") is ConversationState.SERVICE_MENU
+        assert transition(state, "price") is ConversationState.PRICE_MENU
+
+    def test_unknown_event_is_a_no_op(self):
+        assert (
+            transition(ConversationState.MAIN_MENU, "bogus")
+            is ConversationState.MAIN_MENU
+        )
+
+    def test_every_intent_maps_to_a_defined_event(self):
+        """INTENT_EVENTS and KEYWORD_MAP must not drift apart."""
+        assert set(INTENT_EVENTS) == set(settings.KEYWORD_MAP.values())
+
+
+@pytest_asyncio.fixture
+async def bot(monkeypatch, session_factory):
+    """Drive handle_bot_reply end-to-end and inspect what it persisted/sent.
+
+    handle_bot_reply opens its own session, so this hands it a fresh one per
+    call (the _TrackedSessionContext mock is single-entry and cannot serve a
+    multi-message conversation).
+    """
+    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    send_message = AsyncMock(return_value=True)
+    monkeypatch.setattr(chatbot.divar_service, "send_message", send_message)
+
+    class Driver:
+        sent = send_message
+
+        async def say(self, text, conversation_id="conv-state"):
+            await chatbot.handle_bot_reply(conversation_id, text)
+            return [call.args[1] for call in send_message.await_args_list]
+
+        async def state(self, conversation_id="conv-state"):
+            async with session_factory() as verify:
+                conv = (
+                    await verify.execute(
+                        select(Conversation).where(
+                            Conversation.divar_conversation_id == conversation_id
+                        )
+                    )
+                ).scalar_one()
+            return ConversationState(conv.current_state)
+
+    return Driver()
+
+
+@pytest.mark.asyncio
+async def test_first_contact_auto_advances_to_main_menu(
+    bot, seeded_post, sqlite_upsert, catalog
+):
+    """START is not a resting state — first contact moves to MAIN_MENU."""
+    _, post = seeded_post
+
+    sent = await bot.say(f"/start MY_POST {post.post_token}")
+
+    assert settings.WELCOME_MESSAGE in sent
+    assert await bot.state() is ConversationState.MAIN_MENU
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["پشتیبانی", "اپراتور", "گارانتی"])
+async def test_support_and_warranty_reply_with_phone_and_return_to_menu(
+    bot, seeded_post, sqlite_upsert, catalog, text
+):
+    _, post = seeded_post
+    await bot.say(f"/start MY_POST {post.post_token}")
+
+    sent = await bot.say(text)
+
+    assert settings.SUPPORT_PHONE_NUMBER in sent[-1]
+    assert await bot.state() is ConversationState.MAIN_MENU
+
+
+@pytest.mark.asyncio
+async def test_price_keeps_its_reply_and_moves_to_price_menu(
+    bot, seeded_post, sqlite_upsert, catalog
+):
+    """Price behavior is unchanged; only the state write is new."""
+    _, post = seeded_post
+    await bot.say(f"/start MY_POST {post.post_token}")
+
+    sent = await bot.say("قیمت آیفون ۱۳")
+
+    assert sent[-1] == "قیمت iPhone 13: 35,000,000 تومان"
+    assert await bot.state() is ConversationState.PRICE_MENU
+
+
+@pytest.mark.asyncio
+async def test_service_then_menu_navigates_and_returns(
+    bot, seeded_post, sqlite_upsert, catalog
+):
+    _, post = seeded_post
+    await bot.say(f"/start MY_POST {post.post_token}")
+
+    sent = await bot.say("خدمات")
+    assert sent[-1] == settings.SERVICE_MENU_MESSAGE
+    assert await bot.state() is ConversationState.SERVICE_MENU
+
+    sent = await bot.say("منو")
+    assert sent[-1] == settings.MENU_MESSAGE
+    assert await bot.state() is ConversationState.MAIN_MENU
+
+
+@pytest.mark.asyncio
+async def test_unknown_text_leaves_state_unchanged(
+    bot, seeded_post, sqlite_upsert, catalog
+):
+    _, post = seeded_post
+    await bot.say(f"/start MY_POST {post.post_token}")
+    await bot.say("خدمات")
+
+    sent = await bot.say("یک چیز نامرتبط")
+
+    assert sent[-1] == settings.FALLBACK_MESSAGE
+    assert await bot.state() is ConversationState.SERVICE_MENU

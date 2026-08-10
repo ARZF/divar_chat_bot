@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     PRICE_PROMPT_MESSAGE: str = "لطفاً نام محصول را وارد کنید. مثال: قیمت لپتاپ"
     WARRANTY_MESSAGE: str = "محصولات ما دارای گارانتی ۱۲ ماهه هستند."
     SUPPORT_MESSAGE: str = "تیم پشتیبانی ما در ساعات کاری ۹ تا ۱۸ پاسخگوی شما هستند."
+    SUPPORT_PHONE_NUMBER: str = "021-00000000"   # TODO: placeholder — real number pending
+    CONTACT_MESSAGE_TEMPLATE: str = "شماره تماس: {phone}"
+    MENU_MESSAGE: str = "به منوی اصلی بازگشتید. برای قیمت «قیمت»، برای خدمات «خدمات»، برای پشتیبانی «پشتیبانی»."
+    # TODO: PLACEHOLDER — real service-menu content is undefined in plans/. Replace.
+    SERVICE_MENU_MESSAGE: str = "بخش خدمات به‌زودی در دسترس قرار می‌گیرد."
     FALLBACK_MESSAGE: str = "پیام شما دریافت شد. برای راهنمایی بیشتر با پشتیبانی تماس بگیرید."
     UNRESOLVED_CLIENT_MESSAGE: str = "متأسفانه امکان پاسخگویی از طریق این مکالمه وجود ندارد. لطفاً از طریق صفحه آگهی وارد چت شوید."
     GREETING_REPLY_MESSAGE: str = "بفرمایید! چطور می‌توانم کمک کنم؟"
@@ -64,15 +69,25 @@ class Settings(BaseSettings):
         "دارید", "دارین", "داری", "دارن", "موجوده", "موجود", "هست", "نیست",
 
         # --- Pronouns & Fillers (ضمایر و کلمات اضافه) ---
-        "این", "اون", "اینو", "اونو", "واسه", "برای", "توی", "داخل", "یک", "یه"
+        "این", "اون", "اینو", "اونو", "واسه", "برای", "توی", "داخل", "یک", "یه",
+
+        # --- Menu navigation keywords (کلمات منو) ---
+        # Kept out of product-name extraction: these route the state machine.
+        "منو", "خدمات", "سرویس", "اپراتور"
     ])
-    
-    # Note: Pydantic handles dictionaries flawlessly, but mutable types like dicts 
+
+    # Note: Pydantic handles dictionaries flawlessly, but mutable types like dicts
     # should be declared with their types clearly typed out.
+    # _match_intent returns the FIRST match, so insertion order breaks ties on
+    # messages carrying more than one keyword.
     KEYWORD_MAP: Dict[FrozenSet[str], str] = {
         frozenset(["price", "قیمت"]): "PRICE",
         frozenset(["warranty", "گارانتی"]): "WARRANTY",
-        frozenset(["support", "پشتیبانی"]): "SUPPORT",
+        # اپراتور ("operator") covers talk-to-a-human phrasing that پشتیبانی
+        # ("support desk") does not.
+        frozenset(["support", "پشتیبانی", "اپراتور"]): "SUPPORT",
+        frozenset(["menu", "منو"]): "MENU",
+        frozenset(["service", "خدمات", "سرویس"]): "SERVICE",
     }
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

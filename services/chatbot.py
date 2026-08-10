@@ -18,6 +18,7 @@ from services.price_lookup import (
     get_all_matching_prices,
     refresh_lookup_cache,
 )
+from services.state_machine import INTENT_EVENTS, ConversationState, transition
 import services.divar as divar_service
 
 logger = logging.getLogger("chatbot")
@@ -76,13 +77,16 @@ async def _resolve_new_conversation(
     db: AsyncSession,
     divar_conversation_id: str,
     user_text: str,
-) -> Optional[int]:
-    """Attempt to resolve ``client_id`` from a ``/start`` message.
+) -> Optional[Conversation]:
+    """Attempt to resolve a conversation from a ``/start`` message.
 
     If the message carries a post_token (``MY_POST`` or ``DEMAND_POST``)
     and that token is registered in the ``posts`` table, the conversation
-    row is created via an atomic upsert and the resolved ``client_id`` is
-    returned.
+    row is created via an atomic upsert and the persisted ``Conversation``
+    is returned.
+
+    Does NOT commit — the caller owns the transaction so the row and any
+    state transition land together (2.6).
 
     Returns ``None`` for unresolvable touchpoints or unknown post tokens.
     """
@@ -90,7 +94,7 @@ async def _resolve_new_conversation(
 
     if parsed is None:
         return None
-    
+
     touchpoint, token = parsed
 
     if touchpoint in ("MY_POST", "DEMAND_POST") and token:
@@ -110,17 +114,34 @@ async def _resolve_new_conversation(
             .values(
                 client_id=resolved_client_id,
                 divar_conversation_id=divar_conversation_id,
-                current_state="START",
+                current_state=ConversationState.START.value,
             )
             .on_conflict_do_nothing(
                 constraint="uq_conversations_client_divar"
             )
         )
         await db.execute(insert_stmt)
-        await db.commit()
-        return resolved_client_id
+        # Core insert yields no ORM instance, and on the race path inserts
+        # nothing at all — re-select to get the row either way.
+        return await _lookup_conversation(db, divar_conversation_id)
 
     return None
+
+
+def _state_of(conv: Conversation) -> ConversationState:
+    """Parse the persisted state, falling back to START if it is unrecognized.
+
+    Runs inside a BackgroundTask where the webhook already returned 200, so a
+    raised ValueError would just mean the user silently never gets a reply.
+    """
+    try:
+        return ConversationState(conv.current_state)
+    except ValueError:
+        logger.warning(
+            "unrecognized conversation state — falling back to START",
+            extra={"state": conv.current_state},
+        )
+        return ConversationState.START
 
 
 # ---------------------------------------------------------------------------
@@ -173,15 +194,13 @@ async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
 
         if conv is not None:
             # Existing resolved conversation
-            client_id = conv.client_id
             is_new = False
         else:
             # First time seeing this conversation — try to resolve via /start
-            client_id_or_none = await _resolve_new_conversation(
-                db, conversation_id, user_text
-            )
-            if client_id_or_none is None:
-                # Unresolved — send canned message, persist nothing (2.1 design)
+            conv = await _resolve_new_conversation(db, conversation_id, user_text)
+            if conv is None:
+                # Unresolved — send canned message, persist nothing. No commit:
+                # an unresolved conversation never gets a row (CHANGELOG 2026-07-20).
                 logger.info(
                     "unresolved conversation",
                     extra={"text": user_text},
@@ -190,8 +209,9 @@ async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
                     conversation_id, settings.UNRESOLVED_CLIENT_MESSAGE
                 )
                 return
-            client_id = client_id_or_none
             is_new = True
+
+        client_id = conv.client_id
 
         # ---- 2. Set logging context ----
         client_id_var.set(str(client_id))
@@ -202,33 +222,58 @@ async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
         if client_id not in _cache:
             await refresh_lookup_cache(db, client_id)
 
-        # ---- 4. Welcome message on first-in-conversation ----
+        # ---- 4. Welcome message + auto-advance on first-in-conversation ----
         if is_new:
             await divar_service.send_message(
                 conversation_id, settings.WELCOME_MESSAGE
             )
+            # Fires unconditionally on first contact — no keyword needed.
+            conv.current_state = transition(_state_of(conv), "menu").value
 
         # ---- 5. Intent matching & response ----
         normalized_text = normalize_text(user_text)
         intent = _match_intent(normalized_text)
         logger.info("intent matched", extra={"intent": intent, "text": user_text})
 
+        # Unmatched text yields no event, and therefore no transition.
+        event = INTENT_EVENTS.get(intent)
+        if event is not None:
+            conv.current_state = transition(_state_of(conv), event).value
+
         if intent == "PRICE":
             reply = await _handle_price_intent(db, client_id, normalized_text)
-        elif intent == "WARRANTY":
-            reply = settings.WARRANTY_MESSAGE
-        elif intent == "SUPPORT":
-            reply = settings.SUPPORT_MESSAGE
+        elif intent in ("WARRANTY", "SUPPORT"):
+            base = (
+                settings.WARRANTY_MESSAGE
+                if intent == "WARRANTY"
+                else settings.SUPPORT_MESSAGE
+            )
+            contact = settings.CONTACT_MESSAGE_TEMPLATE.format(
+                phone=settings.SUPPORT_PHONE_NUMBER
+            )
+            reply = f"{base}\n{contact}"
+        elif intent == "MENU":
+            reply = settings.MENU_MESSAGE
+        elif intent == "SERVICE":
+            reply = settings.SERVICE_MENU_MESSAGE
         elif _is_pure_greeting(normalized_text):
             if is_new:
+                # Welcome already covers it — but the state change still needs saving.
                 logger.debug("greeting suppressed — welcome already sent")
-                return
-            reply = settings.GREETING_REPLY_MESSAGE
-            await divar_service.send_message(conversation_id, reply)
-            logger.info("reply sent", extra={"text": reply})
-            return
+                reply = None
+            else:
+                reply = settings.GREETING_REPLY_MESSAGE
         else:
             reply = settings.FALLBACK_MESSAGE
+
+        # ---- 6. Persist state, then send ----
+        # One transaction for the whole webhook (2.6). Committed BEFORE the send
+        # because send_message re-raises on non-2xx: a transient Divar failure
+        # should cost the outbound message, never the state.
+        await db.commit()
+
+        if reply is None:
+            return
 
         await divar_service.send_message(conversation_id, reply)
         logger.info("reply sent", extra={"text": reply})
