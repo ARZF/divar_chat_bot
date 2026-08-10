@@ -445,9 +445,15 @@ chat-sending permission, since chat-sending needs no OAuth at all:**
 
 States: `START → MAIN_MENU → PRICE_MENU | SERVICE_MENU | HUMAN_SUPPORT`
 
-- [ ] Store `current_state` in `conversations.current_state`
-- [ ] On each webhook: load state → process → save updated state as a single transaction
-- [ ] State transitions defined in a single `transitions: dict` map, not scattered
+> **DONE (2026-08-11).** Wired in `services/state_machine.py` + `services/chatbot.py`.
+> `HUMAN_SUPPORT` and the `back`/`exit` edges are **defined but text-unreachable this
+> phase** — there is no persistent human-support mode (SUPPORT/WARRANTY hand out
+> `SUPPORT_PHONE_NUMBER` and stay in `MAIN_MENU`), and button navigation belongs to
+> Phase 3. Do not delete them as dead code. See `CHANGELOG.md` 2026-08-11.
+
+- [x] Store `current_state` in `conversations.current_state`
+- [x] On each webhook: load state → process → save updated state as a single transaction
+- [x] State transitions defined in a single `transitions: dict` map, not scattered
       conditionals
 
 ## 2.7 Admin & Seller Endpoints Rework

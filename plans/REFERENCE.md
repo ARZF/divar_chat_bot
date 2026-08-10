@@ -186,6 +186,7 @@ app/
 │   ├── divar.py          # Phase 1, reworked in Phase 2 (header split, get_user)
 │   ├── price_lookup.py   # Phase 1, reworked in Phase 2 (per-client cache)
 │   ├── chatbot.py        # Phase 1, reworked in Phase 2 (uses client_id)
+│   ├── state_machine.py  # Phase 2 (2.6) — ConversationState, TRANSITIONS, INTENT_EVENTS
 │   └── ai.py             # Phase 4 only — do not create earlier
 ├── schemas/
 │   ├── webhook.py        # Phase 1 (gains 2 fields, see above), Phase 2 unchanged

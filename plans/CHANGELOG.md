@@ -4,6 +4,105 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-08-11** — Marked PHASE2.md **§2.6 (State Machine)** as done. `services/state_machine.py`
+  had existed since 2026-08-10 but was **entirely dead code** — its only importer was
+  `models/conversation.py`, for a column default. `handle_bot_reply` was still the Phase 1
+  stateless keyword router: `current_state` was written once at insert and never read again.
+  All three §2.6 boxes are now genuinely satisfied:
+
+  1. **Stored** — `conversations.current_state`, `NOT NULL` with `server_default='START'`
+     (migration `0003`, which also backfills existing `NULL`s before the `SET NOT NULL`;
+     Postgres `server_default` does not retroactively fill rows).
+  2. **Single transaction per webhook** — `_resolve_new_conversation` no longer commits
+     internally and now returns the `Conversation` ORM object (re-`SELECT` after the Core
+     `on_conflict_do_nothing` upsert, which produces no instance and inserts nothing on the
+     race path). `handle_bot_reply` owns the transaction with one `await db.commit()`.
+  3. **One `transitions` map** — `TRANSITIONS` in `services/state_machine.py`; no state
+     conditionals anywhere in `chatbot.py`.
+
+  **Two vocabularies, one bridge.** `config.KEYWORD_MAP` yields uppercase intents
+  (`PRICE|WARRANTY|SUPPORT|MENU|SERVICE`); `TRANSITIONS` consumes lowercase events
+  (`price|service|human|menu|back|exit`). They previously disagreed — `WARRANTY` mapped to
+  no state, `SERVICE_MENU` to no intent. Reconciled with a single `INTENT_EVENTS` dict, the
+  only place the two meet. A test asserts `set(INTENT_EVENTS) == set(KEYWORD_MAP.values())`
+  so a new keyword cannot be added without routing it.
+
+  **Decisions taken (user-confirmed before implementation):**
+  - **No persistent human-support mode this phase.** The task spec wanted SUPPORT →
+    `MAIN_MENU`; the map sent `human` → `HUMAN_SUPPORT`. Resolved by repointing `human` to
+    `MAIN_MENU`: SUPPORT/WARRANTY reply with `SUPPORT_PHONE_NUMBER` appended on a second
+    line and return to the menu immediately. Bot replies are **not** suppressed afterward.
+    `HUMAN_SUPPORT` is now defined-but-unreachable, alongside the `back`/`exit` edges
+    (Phase 3 owns button navigation, `PHASE3.md:5-9`). **Retained deliberately — do not
+    delete as dead code.**
+  - **`price`/`service`/`human`/`menu` edges added to both `PRICE_MENU` and `SERVICE_MENU`**,
+    which previously defined only `back`. Menus are not sticky: any intent routes correctly
+    from any state.
+  - **`START` auto-advances to `MAIN_MENU` on first contact, unconditionally** — no keyword
+    needed. It reuses the existing `{"menu": MAIN_MENU}` edge rather than adding a code path.
+    Previously nothing moved a conversation out of `START` at all.
+  - **State values are uppercase** (`"START"`, not `"start"`) — `ConversationState` is a
+    `StrEnum` whose values match `chatbot.py`'s literals. `chatbot.py` now uses
+    `ConversationState.START.value` instead of a bare `"START"`, killing the drift risk.
+
+  **Persian tokens** (each verified to survive `normalize_text`'s `_CHAR_MAP`/`_WORD_SYNONYMS`
+  rewrites unchanged, since `_match_intent` runs on normalized text): `menu` → `منو`;
+  `service` → `خدمات` with `سرویس` as a synonym in the same frozenset; `اپراتور`
+  ("operator") added to the existing SUPPORT set, because `پشتیبانی` means *support desk*
+  and does not cover talk-to-a-human phrasing. All four added to `FILTERED_KEYWORDS` so they
+  cannot leak into `_extract_product_name` output (leak check on `قیمت خدمات منو گوشی`
+  returns only `گوشی`). `KEYWORD_MAP` insertion order matters — `_match_intent` returns the
+  first match, so it is the tiebreak on messages carrying more than one keyword.
+
+  **Commit-before-send is deliberate.** `send_message` re-raises on non-2xx
+  (`services/divar.py`) and no `_safe_send` exists in this codebase (advisor-plan 004 was
+  never implemented). Committing first means a transient Divar failure costs the outbound
+  message but never the state. Relatedly, the branch chain was restructured to only *build*
+  `reply` (using `None` for the suppressed-greeting case) rather than send-and-return inline —
+  the old greeting early-return at `chatbot.py` would have silently dropped any state write
+  that preceded it. The **unresolved-client** path keeps its bare `return` with no commit
+  (no row is ever persisted for unresolved conversations, per 2026-07-20 below), now with a
+  comment so the asymmetry does not read as an oversight.
+
+  **`_state_of(conv)`** parses `current_state` and falls back to `START` with a warning on
+  `ValueError`. A malformed or legacy row would otherwise raise inside a `BackgroundTask`,
+  where the webhook has already returned 200 and the user simply never gets a reply.
+
+  **New config** (reply strings live in `config.py`, never in `chatbot.py` — see REFERENCE.md):
+  `SUPPORT_PHONE_NUMBER` (placeholder default `021-00000000`, no `.env` requirement so
+  nothing breaks when unset; mirrored into `.env.example` commented out),
+  `CONTACT_MESSAGE_TEMPLATE`, `MENU_MESSAGE`, and `SERVICE_MENU_MESSAGE`.
+  **Both `SUPPORT_PHONE_NUMBER` and `SERVICE_MENU_MESSAGE` are `TODO` placeholders** — the
+  real phone number is pending, and real service-menu content is undefined anywhere in
+  `plans/`. The `SERVICE` branch needs one so it has something to send; replace in a
+  future pass.
+
+  Also added `services/state_machine.py` to REFERENCE.md's file tree — it was created
+  2026-08-10 without being listed, which conflicts with the "only create files listed above"
+  agent rule. Tree drift remains for `tests/test_chatbot.py` and `alembic/`, not fixed here.
+
+  **Tests** (`tests/test_chatbot.py`): a `TestTransitionTable` class covers the new edges as
+  pure units (no DB), plus integration tests driving `handle_bot_reply` and asserting the
+  persisted row from a *separate* verification session — auto-advance on first contact,
+  SUPPORT/`اپراتور`/WARRANTY all landing in `MAIN_MENU` with the phone in the reply, PRICE
+  reaching `PRICE_MENU` with its reply byte-identical to before, service→menu round trip,
+  and unknown text leaving state untouched. These need a fresh session per call, since the
+  existing `_TrackedSessionContext` mock is single-entry and cannot be entered twice; a `bot`
+  fixture patches `chatbot.AsyncSessionLocal` with `lambda: session_factory()`. Three
+  mutations confirmed the tests are real guards, not decoration: reverting the `human` edge
+  fails 4, removing the auto-advance fails 7, removing the single commit fails 8. Full suite:
+  **138 passed**.
+
+  **Still open, deliberately not addressed** (raised, reviewed, left): `models/conversation.py`
+  imports `services.state_machine` — inverted layering (every other service imports models,
+  not the reverse) and a latent import cycle that will surface first in Alembic autogenerate;
+  fixing it means moving the enum, which widens the diff. `_lookup_conversation` filters on
+  `divar_conversation_id` alone against the composite `(client_id, divar_conversation_id)`
+  unique constraint, so `scalar_one_or_none()` raises `MultipleResultsFound` if two clients
+  ever share a conversation id (confirmed by execution; pre-existing). `PHASE4.md:8` expects
+  the state machine to return `FALLBACK`, which is not one of §2.6's five states — an
+  unreconciled gap for Phase 4.
+
 - **2026-08-03** — Marked PHASE2.md **§2.5 (Background Task / Session Lifetime)** as done.
   **It was completed as a side effect of implementing 2.1 and 2.4, not as a separate pass** —
   which is why both boxes stayed `[ ]` long after the code had actually landed. Audit
