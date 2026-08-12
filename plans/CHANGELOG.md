@@ -4,6 +4,97 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-08-13** — Fixed two **§2.2 conversation-resolution defects** found in the Phase 2
+  audit, plus the schema correction the second one needed.
+
+  **(1) Double-welcome race — the checked box was only half-implemented.** §2.2 says the
+  upsert must be *"checked for whether it actually inserted a row."* The upsert had been there
+  since 2026-08-11, but the check had not: `handle_bot_reply` set `is_new = True` on the sole
+  basis that its own entry-point `SELECT` had found nothing. Under Divar's at-least-once
+  redelivery, two deliveries can both pass that `SELECT` before either commits — so both
+  claimed to be new. Only one actually inserted. The loser re-sent `WELCOME_MESSAGE` and
+  re-applied `START → MAIN_MENU`, knocking a mid-conversation user back to the menu.
+  `_resolve_new_conversation` now derives `is_new` from `result.rowcount == 1` on the upsert
+  itself and returns `Optional[Tuple[Conversation, bool]]`; `handle_bot_reply` unpacks it.
+  There was **no `SELECT`-before-`INSERT` inside `_resolve_new_conversation` to remove** — the
+  upsert was already first. The bug was entirely in how the caller inferred `is_new`.
+
+  The post-upsert re-`SELECT` (needed because a Core insert yields no ORM instance, and
+  inserts nothing at all on the race path) is now scoped to the full composite key
+  `WHERE client_id = ... AND divar_conversation_id = ...` instead of reusing the unscoped
+  `_lookup_conversation`. `client_id` is known by that point, which makes this the one query
+  in the whole flow where §2.2's *"enforce `WHERE client_id` on every query"* rule is
+  enforceable in code rather than merely relied upon via the constraint.
+
+  **(2) `MultipleResultsFound` risk on the unscoped entry-point lookup.**
+  `_lookup_conversation` is the chatbot's entry point and keys on `divar_conversation_id`
+  alone. It cannot filter by `client_id` — resolving `client_id` is its entire purpose. With
+  only the composite `(client_id, divar_conversation_id)` unique constraint, two rows could
+  legally share a `divar_conversation_id` across clients, and `scalar_one_or_none()` would
+  raise `MultipleResultsFound` inside a `BackgroundTask` — an unhandled 500-class failure
+  where the user simply never gets a reply.
+
+  Fixed at the root (**Option B**) rather than by making the read defensive: migration `0004`
+  adds a standalone global `UNIQUE (divar_conversation_id)`, and the model gains the matching
+  `UniqueConstraint`. A `.first()`/`limit(1)` fallback was explicitly rejected — it would have
+  silently served one of two rows that must never coexist. `_lookup_conversation` keeps its
+  logic unchanged and carries a comment pointing at `0004` so a future reader does not
+  reintroduce that fallback.
+
+  **Evidence basis — inference, not a documented guarantee.** The Divar docs nowhere state
+  that `conversation.id` is globally unique. It is inferred from the ID being **Divar-assigned**
+  and appearing as a UUID in every documented example:
+  - `docs/events/chat.md` — `conversation.id` is `"edbb9499-cccc-4d35-b21f-621fa95f2b3e"` in
+    all seven message-type payload examples (TEXT/IMAGE/FILE/VOICE/LOCATION/VIDEO/CONTACT).
+  - `docs/widgets/actions/dynamic_action.md` and `docs/widgets/actions/open_server_link.md` —
+    `"conversation_id": "6b3d5cf7-9291-4fa9-892a-9d07e300daea"`; the latter also documents a
+    max length of 64.
+  - `docs/chat/chatbot_conversations.md` uses a bare `{{conversation_id}}` placeholder — it
+    shows no literal value, so it supports the *provenance* claim (Divar assigns it) but not
+    the UUID-format one. `docs/events/ReadMe.md` does not mention `conversation_id` at all.
+
+  Note this is the **inverse** of the `products.normalized_name` reasoning, which the old §2.2
+  note wrongly cited as the same case. That one is composite-only precisely *because* the value
+  is **seller-supplied** and two tenants can legitimately both list "iPhone 13". A
+  Divar-assigned opaque ID has no such collision mode. The §2.2 note has been corrected.
+
+  **Decision taken anyway, and why.** A UUID-shaped, platform-assigned identifier colliding
+  across two of our tenants would mean Divar handed the same conversation to two different
+  sellers' touchpoints — which would be a Divar-side bug, not a scenario to design for. The
+  alternative (defensive read) makes the *guaranteed-broken* case silent while adding a
+  permanent correctness hazard. Constraining the schema instead makes the impossible case
+  loud, and the composite constraint is deliberately **kept** alongside it: it remains the
+  named `ON CONFLICT` target that keeps legitimate redelivery a silent no-op.
+
+  **Residual risk if the inference is wrong.** The composite `ON CONFLICT DO NOTHING` does not
+  cover the global constraint, so a second client claiming an already-owned
+  `divar_conversation_id` raises `IntegrityError` at insert. `_resolve_new_conversation`
+  catches it specifically, rolls back, logs at `ERROR` with **both** client_ids plus the
+  `divar_conversation_id` and `post_token`, and returns `None` — routing through the exact same
+  path as an unresolved client (`UNRESOLVED_CLIENT_MESSAGE`, no further processing, nothing
+  persisted). So the failure mode is: **the losing request fails safe to "unresolved," and the
+  legitimate owner's row is untouched. It is not a 500, and it is not cross-tenant data
+  leakage** — no client ever reads a row it does not own, because the losing insert never
+  lands. Migration `0004` also deliberately performs no dedup backfill: if live data already
+  violates the constraint it fails loudly, since picking a winner between two tenants' rows is
+  not a decision a migration should make silently.
+
+  **Tests** (`tests/test_chatbot.py`): `test_redelivered_upsert_reports_not_new` pins the
+  `rowcount → is_new` contract directly; `test_redelivered_start_does_not_rewelcome_or_reset_state`
+  drives the race end-to-end (state is moved to `SERVICE_MENU` first, so a re-applied
+  `START → MAIN_MENU` is *observable* — asserting on `MAIN_MENU` alone would have been masked
+  by `MAIN_MENU --menu--> MAIN_MENU` landing on the same state);
+  `test_cross_client_conversation_id_collision_fails_safe` asserts the `IntegrityError` is
+  caught, logged with both client_ids, and answered with `UNRESOLVED_CLIENT_MESSAGE`. Both
+  race tests patch `_lookup_conversation` to `None` to simulate "row not yet visible to the
+  entry lookup" — which is why the collision path's owner lookup uses a direct `SELECT` rather
+  than reusing `_lookup_conversation`: the diagnostic must stay accurate regardless. Verified
+  by reverting `is_new` to hardcoded `True` and confirming both redelivery tests fail.
+  Full suite: 141 passed.
+
+  **Explicitly out of scope** (separate, undecided items from the same audit): §2.4/2.5, the
+  dev OAuth routes, and `/seller/posts`.
+
 - **2026-08-11** — Marked PHASE2.md **§2.6 (State Machine)** as done. `services/state_machine.py`
   had existed since 2026-08-10 but was **entirely dead code** — its only importer was
   `models/conversation.py`, for a column default. `handle_bot_reply` was still the Phase 1

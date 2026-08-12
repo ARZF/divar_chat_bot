@@ -133,7 +133,8 @@ products:       id, client_id (FK, indexed), item_name, normalized_name, price,
 
 conversations:  id, client_id (FK, indexed), divar_conversation_id,
                 current_state, metadata (JSONB), created_at, updated_at
-                UNIQUE (client_id, divar_conversation_id)  -- composite, NOT globally unique
+                UNIQUE (client_id, divar_conversation_id)  -- composite; ON CONFLICT target
+                UNIQUE (divar_conversation_id)             -- global, migration 0004
 
 messages:       id, conversation_id (FK, indexed), divar_message_id (Unique),
                 sender_type (Enum: user|bot|human_agent), text_content,
@@ -178,8 +179,21 @@ messages:       id, conversation_id (FK, indexed), divar_message_id (Unique),
 > canonical (display) name vs. normalized (matching) text must be preserved at the DB level —
 > store both, don't re-normalize on read.
 
-> NOTE — `conversations.divar_conversation_id` uniqueness: composite
-> `(client_id, divar_conversation_id)`, same reasoning as `products`.
+> NOTE — `conversations.divar_conversation_id` uniqueness: **both** a composite
+> `(client_id, divar_conversation_id)` and a standalone global `UNIQUE
+> (divar_conversation_id)` (migration `0004`, 2026-08-13). This is **not** the
+> `products` reasoning — that one is about *seller-supplied* values legitimately
+> colliding (two sellers both listing "iPhone 13"). A `divar_conversation_id` is
+> **assigned by Divar**, so one ID belongs to exactly one conversation and
+> therefore exactly one client; there is nothing for two tenants to collide on.
+> The global constraint is load-bearing: the chatbot's entry-point lookup
+> (`_lookup_conversation`) keys on `divar_conversation_id` alone — it *cannot*
+> filter by `client_id`, since resolving `client_id` is its entire job — so
+> without it, `scalar_one_or_none()` would raise `MultipleResultsFound`.
+> The composite is kept because it is the named `ON CONFLICT` target that makes a
+> redelivered webhook a silent no-op; the global one raises `IntegrityError`
+> instead, which `_resolve_new_conversation` catches and fails safe on. See
+> `CHANGELOG.md` 2026-08-13 for the evidence basis and residual risk.
 
 **Tasks:**
 
@@ -191,6 +205,9 @@ messages:       id, conversation_id (FK, indexed), divar_message_id (Unique),
       in 2.1 — implemented as a single atomic upsert
       (`INSERT ... ON CONFLICT (client_id, divar_conversation_id) DO NOTHING`, checking
       whether a row was actually inserted), to avoid the double-welcome race described below
+      — the upsert landed 2026-08-11, but the **"checking whether a row was actually
+      inserted"** half was missing until 2026-08-13 (`is_new` was hardcoded `True`); this box
+      was ticked early. `is_new` now derives from `result.rowcount == 1`.
 - [x] Enforce `WHERE client_id = :current_client_id` on every query — no exceptions
 - [x] Migrate price storage from in-memory dict to `products` table, scoped by `client_id`
 
