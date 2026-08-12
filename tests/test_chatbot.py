@@ -1,5 +1,6 @@
 # Env vars for config.py are set by the root conftest.py before collection.
 import inspect
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -160,13 +161,15 @@ async def test_start_post_touchpoints_resolve_to_seeded_client(
 ):
     client, post = seeded_post
 
-    conv = await chatbot._resolve_new_conversation(
+    resolved = await chatbot._resolve_new_conversation(
         db,
         "conversation-resolved",
         f"/start {touchpoint} {post.post_token}",
     )
 
-    assert conv is not None
+    assert resolved is not None
+    conv, is_new = resolved
+    assert is_new is True
     assert conv.client_id == client.id
     conversation = (
         await db.execute(
@@ -272,6 +275,24 @@ async def test_persisted_state_parses_back_into_the_enum(
     loaded = await chatbot._lookup_conversation(db, "conversation-state-roundtrip")
 
     assert ConversationState(loaded.current_state) is ConversationState.START
+
+
+@pytest.mark.asyncio
+async def test_redelivered_upsert_reports_not_new(db, seeded_post, sqlite_upsert):
+    """`is_new` must come from the upsert's rowcount, not from the entry lookup.
+
+    Second call stands in for a redelivered webhook that reached the INSERT after
+    another delivery already won it: same row back, but `is_new` False.
+    """
+    client, post = seeded_post
+    start = f"/start MY_POST {post.post_token}"
+
+    first = await chatbot._resolve_new_conversation(db, "conv-redelivered", start)
+    second = await chatbot._resolve_new_conversation(db, "conv-redelivered", start)
+
+    assert first[1] is True
+    assert second[1] is False
+    assert second[0].client_id == client.id
 
 
 # ---------------------------------------------------------------------------
@@ -604,3 +625,88 @@ async def test_unknown_text_leaves_state_unchanged(
 
     assert sent[-1] == settings.FALLBACK_MESSAGE
     assert await bot.state() is ConversationState.SERVICE_MENU
+
+
+# ---------------------------------------------------------------------------
+# §2.2 conversation-resolution defects (fixed 2026-08-13)
+#
+# Both drive the race the entry-point lookup cannot see: `_lookup_conversation`
+# is patched to None so the redelivered webhook reaches the upsert, exactly as it
+# would if two deliveries were in flight before either committed.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_redelivered_start_does_not_rewelcome_or_reset_state(
+    monkeypatch, bot, seeded_post, sqlite_upsert, catalog
+):
+    """A redelivered /start that loses the insert race must be a no-op.
+
+    The conversation is moved off MAIN_MENU first, so a re-applied
+    START → MAIN_MENU is observable rather than being masked by
+    MAIN_MENU --menu--> MAIN_MENU landing on the same state.
+    """
+    _, post = seeded_post
+    start = f"/start MY_POST {post.post_token}"
+
+    await bot.say(start)
+    await bot.say("خدمات")
+    assert await bot.state() is ConversationState.SERVICE_MENU
+
+    monkeypatch.setattr(chatbot, "_lookup_conversation", AsyncMock(return_value=None))
+    sent = await bot.say(start)
+
+    # `sent` is cumulative across the conversation: exactly one welcome, ever.
+    assert sent.count(settings.WELCOME_MESSAGE) == 1
+    assert await bot.state() is ConversationState.SERVICE_MENU
+
+
+@pytest.mark.asyncio
+async def test_cross_client_conversation_id_collision_fails_safe(
+    monkeypatch, bot, seeded_post, sqlite_upsert, catalog, session_factory, caplog
+):
+    """A second client claiming a live divar_conversation_id must not 500.
+
+    The composite ON CONFLICT target does not cover this — it is a different
+    client_id — so migration 0004's global UNIQUE raises IntegrityError. That
+    must be caught and routed to UNRESOLVED_CLIENT_MESSAGE, the same fail-safe
+    path as an unknown post token, leaving the real owner's row untouched.
+    """
+    client_a, post_a = seeded_post
+    async with session_factory() as setup:
+        client_b = Client(phone_number="09120000002")
+        setup.add(client_b)
+        await setup.flush()
+        setup.add(Post(post_token="OTHER_TOKEN", client_id=client_b.id))
+        await setup.commit()
+        client_b_id = client_b.id
+
+    await bot.say(f"/start MY_POST {post_a.post_token}", conversation_id="conv-collide")
+
+    monkeypatch.setattr(chatbot, "_lookup_conversation", AsyncMock(return_value=None))
+    with caplog.at_level(logging.ERROR, logger="chatbot"):
+        sent = await bot.say(
+            "/start MY_POST OTHER_TOKEN", conversation_id="conv-collide"
+        )
+
+    assert sent[-1] == settings.UNRESOLVED_CLIENT_MESSAGE
+
+    # Logged with both sides of the collision, so it is diagnosable in prod.
+    collision = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(collision) == 1
+    assert collision[0].owner_client_id == client_a.id
+    assert collision[0].claiming_client_id == client_b_id
+    assert collision[0].divar_conversation_id == "conv-collide"
+
+    # Nothing persisted for B; A still owns the one row.
+    async with session_factory() as verify:
+        owners = (
+            (
+                await verify.execute(
+                    select(Conversation.client_id).where(
+                        Conversation.divar_conversation_id == "conv-collide"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert owners == [client_a.id]
