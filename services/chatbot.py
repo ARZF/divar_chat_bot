@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
@@ -66,6 +67,10 @@ async def _lookup_conversation(
     db: AsyncSession, divar_conversation_id: str
 ) -> Optional[Conversation]:
     """Look up an existing resolved conversation by its Divar-assigned ID."""
+    # No client_id filter is possible here — it is exactly what this lookup
+    # resolves. scalar_one_or_none() is safe because migration 0004 makes
+    # divar_conversation_id globally UNIQUE at the DB level; do not add a
+    # defensive .first()/limit(1) fallback, it would only mask a broken schema.
     stmt = select(Conversation).where(
         Conversation.divar_conversation_id == divar_conversation_id
     )
@@ -77,18 +82,22 @@ async def _resolve_new_conversation(
     db: AsyncSession,
     divar_conversation_id: str,
     user_text: str,
-) -> Optional[Conversation]:
+) -> Optional[Tuple[Conversation, bool]]:
     """Attempt to resolve a conversation from a ``/start`` message.
 
     If the message carries a post_token (``MY_POST`` or ``DEMAND_POST``)
     and that token is registered in the ``posts`` table, the conversation
-    row is created via an atomic upsert and the persisted ``Conversation``
-    is returned.
+    row is created via an atomic upsert and ``(conversation, is_new)`` is
+    returned. ``is_new`` reflects whether *this* call actually inserted the
+    row, so a redelivered webhook that loses the race gets ``False`` and the
+    caller skips the welcome message and the auto-advance (2.2).
 
     Does NOT commit — the caller owns the transaction so the row and any
     state transition land together (2.6).
 
-    Returns ``None`` for unresolvable touchpoints or unknown post tokens.
+    Returns ``None`` for unresolvable touchpoints, unknown post tokens, and
+    for a second client claiming an already-owned ``divar_conversation_id``.
+    All three fail safe the same way: nothing persisted, canned reply.
     """
     parsed = parse_start_message(user_text)
 
@@ -97,35 +106,80 @@ async def _resolve_new_conversation(
 
     touchpoint, token = parsed
 
-    if touchpoint in ("MY_POST", "DEMAND_POST") and token:
-        # Look up post_token → client_id (WHERE scoped to post_token PK)
-        stmt = select(Post.client_id).where(Post.post_token == token)
-        result = await db.execute(stmt)
-        resolved_client_id = result.scalar_one_or_none()
+    if touchpoint not in ("MY_POST", "DEMAND_POST") or not token:
+        return None
 
-        if resolved_client_id is None:
-            return None  # Post not registered by any seller
+    # Look up post_token → client_id (WHERE scoped to post_token PK)
+    stmt = select(Post.client_id).where(Post.post_token == token)
+    result = await db.execute(stmt)
+    resolved_client_id = result.scalar_one_or_none()
 
-        # Atomic upsert: INSERT ... ON CONFLICT DO NOTHING
-        # rowcount == 1 → we created the row (new conversation)
-        # rowcount == 0 → race: another request already created it
-        insert_stmt = (
-            pg_insert(Conversation)
-            .values(
-                client_id=resolved_client_id,
-                divar_conversation_id=divar_conversation_id,
-                current_state=ConversationState.START.value,
+    if resolved_client_id is None:
+        return None  # Post not registered by any seller
+
+    # Atomic upsert: INSERT ... ON CONFLICT DO NOTHING.
+    # The named composite constraint covers legitimate redelivery only — same
+    # client, same conversation. A *different* client claiming this
+    # divar_conversation_id conflicts against 0004's global UNIQUE instead,
+    # which DO NOTHING does not swallow: it raises IntegrityError below.
+    insert_stmt = (
+        pg_insert(Conversation)
+        .values(
+            client_id=resolved_client_id,
+            divar_conversation_id=divar_conversation_id,
+            current_state=ConversationState.START.value,
+        )
+        .on_conflict_do_nothing(
+            constraint="uq_conversations_client_divar"
+        )
+    )
+    try:
+        result = await db.execute(insert_stmt)
+    except IntegrityError:
+        # Should be unreachable: Divar assigns conversation IDs, so two clients
+        # cannot legitimately be handed the same one. If it happens, our
+        # global-uniqueness inference (see CHANGELOG 2026-08-13) was wrong.
+        await db.rollback()
+        # Deliberately not via _lookup_conversation: this diagnostic must stay
+        # accurate regardless of what the caller's entry-point lookup returned.
+        owner_client_id = (
+            await db.execute(
+                select(Conversation.client_id).where(
+                    Conversation.divar_conversation_id == divar_conversation_id
+                )
             )
-            .on_conflict_do_nothing(
-                constraint="uq_conversations_client_divar"
+        ).scalar_one_or_none()
+        logger.error(
+            "divar_conversation_id already owned by another client — "
+            "refusing to attribute this conversation",
+            extra={
+                "divar_conversation_id": divar_conversation_id,
+                "owner_client_id": owner_client_id,
+                "claiming_client_id": resolved_client_id,
+                "post_token": token,
+            },
+        )
+        return None
+
+    # rowcount == 1 → we created the row (new conversation)
+    # rowcount == 0 → race: another delivery already created it
+    is_new = result.rowcount == 1
+
+    # A Core insert yields no ORM instance, and on the race path inserts nothing
+    # at all — re-select to get the row either way. Scoped by the full composite
+    # key: client_id is known by now, making this the one query in the flow where
+    # 2.2's "WHERE client_id = :current_client_id" rule is enforceable in code
+    # rather than merely relied on via the constraint.
+    conv = (
+        await db.execute(
+            select(Conversation).where(
+                Conversation.client_id == resolved_client_id,
+                Conversation.divar_conversation_id == divar_conversation_id,
             )
         )
-        await db.execute(insert_stmt)
-        # Core insert yields no ORM instance, and on the race path inserts
-        # nothing at all — re-select to get the row either way.
-        return await _lookup_conversation(db, divar_conversation_id)
+    ).scalar_one()
 
-    return None
+    return conv, is_new
 
 
 def _state_of(conv: Conversation) -> ConversationState:
@@ -197,10 +251,12 @@ async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
             is_new = False
         else:
             # First time seeing this conversation — try to resolve via /start
-            conv = await _resolve_new_conversation(db, conversation_id, user_text)
-            if conv is None:
+            resolved = await _resolve_new_conversation(db, conversation_id, user_text)
+            if resolved is None:
                 # Unresolved — send canned message, persist nothing. No commit:
                 # an unresolved conversation never gets a row (CHANGELOG 2026-07-20).
+                # A cross-client divar_conversation_id collision lands here too,
+                # already logged and rolled back (CHANGELOG 2026-08-13).
                 logger.info(
                     "unresolved conversation",
                     extra={"text": user_text},
@@ -209,7 +265,10 @@ async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
                     conversation_id, settings.UNRESOLVED_CLIENT_MESSAGE
                 )
                 return
-            is_new = True
+            # is_new comes from whether the upsert actually inserted — NOT from
+            # "the lookup above found nothing". Two redelivered webhooks can both
+            # pass that lookup before either commits; only one inserts.
+            conv, is_new = resolved
 
         client_id = conv.client_id
 

@@ -24,6 +24,14 @@ class Conversation(Base):
             "divar_conversation_id",
             name="uq_conversations_client_divar",
         ),
+        # Divar assigns conversation IDs, so one ID belongs to exactly one client.
+        # Global uniqueness (migration 0004) is what makes the entry-point lookup
+        # in services/chatbot.py — which cannot filter on client_id, it resolves
+        # it — safe to read with scalar_one_or_none().
+        UniqueConstraint(
+            "divar_conversation_id",
+            name="uq_conversations_divar_conversation_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
