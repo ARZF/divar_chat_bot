@@ -83,6 +83,44 @@
 - [ ] Consider asynchronous SMS delivery (BackgroundTasks, Celery, or a message queue) for higher throughput deployments.
 - [ ] Add delivery status monitoring and alerting for SMS provider failures.
 
+### SMS OTP Delivery (deferred 2026-08-13, audit-confirmed gaps)
+
+> **Status: OTP login path exists in code (api/auth.py) but is not production-usable.**
+> Deliberately deferred — "Sign in with Divar" (OAuth) remains the only real login path
+> until this is picked up. Do not enable/advertise OTP login until all items below are
+> closed. Source: 2026-08-13 §2.8 audit.
+
+- [ ] **No real SMS provider is wired in.** `services/sms.py`'s only concrete
+      `SMSService` implementation is `ConsoleSMSService`, which logs the plaintext OTP
+      instead of sending it — this is the active implementation returned by
+      `get_sms_service()`, not a test-only stub. Must add a real provider (e.g.
+      Kavenegar, per REFERENCE.md's original suggestion) before OTP can be exposed to
+      real sellers.
+- [ ] **`SMS_PROVIDER_API_KEY` / `SMS_PROVIDER_URL` are `str | None = None` in
+      `config.py`.** §2.8 specifies both as required `str` with no default — should fail
+      fast at startup if unset, not silently allow a no-op SMS path into production.
+      Fix alongside the provider implementation above, since a required-but-unused
+      setting is equally wrong.
+- [ ] **`/auth/otp/request`'s SMS-failure response has the wrong shape.** Spec requires
+      a top-level `{"error": "sms_unavailable", "message": "..."}`. Current
+      implementation raises `HTTPException(detail={...})`, which FastAPI nests under
+      `"detail"`. The existing test (`test_otp_request_sms_failure_returns_503_and_no_active_otp`)
+      asserts the wrong (nested) shape and never actually queries `otp_codes` to confirm
+      cleanup — both need fixing together when this is picked up, so the test isn't
+      re-locking in the bug.
+- [ ] **OTP request/verify are not concurrency-safe.** No locking or uniqueness
+      constraint enforces "one active OTP per phone" — two simultaneous `/auth/otp/request`
+      calls can both pass the cooldown check; two simultaneous `/auth/otp/verify` calls
+      can both validate the same code before either deletes it. Needs a row lock or a
+      partial-unique constraint before this is real.
+- [ ] Add concurrency + exact-contract tests once the above land: OTP consumption
+      after success, attempt increments after failure, stored hash values, and the two
+      race conditions above.
+
+**Not blocked on the above, already fixed 2026-08-13** (see CHANGELOG): refresh-token
+rotation replay window and the OAuth token upsert race — both were independent of SMS
+and didn't need to wait.
+
 ### Deployment & Security
 
 - [ ] Allow configurable cookie settings (Domain, SameSite policy, Secure flag) per deployment environment.
