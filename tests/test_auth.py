@@ -365,6 +365,28 @@ def test_me_with_invalid_token_returns_401(client):
     assert resp.status_code == 401
 
 
+def test_admin_upload_prices_rejects_missing_authorization(client):
+    resp = client.post(
+        "/admin/upload-prices",
+        files={
+            "file": (
+                "prices.xlsx",
+                b"not processed",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert resp.status_code == 401
+
+
+def test_seller_posts_rejects_missing_authorization(client):
+    resp = client.post(
+        "/seller/posts",
+        json={"post_tokens": ["post-token"]},
+    )
+    assert resp.status_code == 401
+
+
 # --------------------------------------------------------------------------------------
 # find_or_create_client merge logic
 # --------------------------------------------------------------------------------------
@@ -389,3 +411,40 @@ async def test_find_or_create_client_creates_then_merges(db):
     )
     assert again.id == created.id
     assert again.divar_user_id == "divar_user_1"
+
+
+@pytest.mark.asyncio
+async def test_find_or_create_client_recovers_from_concurrent_insert(tmp_path):
+    database_path = tmp_path / "client-race.db"
+    race_engine = create_async_engine(
+        f"sqlite+aiosqlite:///{database_path}",
+        connect_args={"timeout": 10},
+    )
+    race_sessions = async_sessionmaker(
+        race_engine, class_=AsyncSession, expire_on_commit=False
+    )
+    async with race_engine.begin() as conn:
+        await conn.run_sync(
+            lambda c: Client.metadata.create_all(c, tables=[Client.__table__])
+        )
+
+    async def create_client():
+        async with race_sessions() as race_db:
+            return await auth_module.find_or_create_client(
+                race_db, phone_number="09120000002"
+            )
+
+    try:
+        first, second = await asyncio.gather(create_client(), create_client())
+        assert first.id == second.id
+
+        async with race_sessions() as check_db:
+            rows = (
+                await check_db.execute(
+                    select(Client).where(Client.phone_number == "09120000002")
+                )
+            ).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].id == first.id
+    finally:
+        await race_engine.dispose()
