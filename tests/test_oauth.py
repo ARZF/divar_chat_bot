@@ -1,3 +1,4 @@
+import asyncio
 import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ os.environ.setdefault("OTP_HMAC_KEY", "test_otp_hmac_key")
 import pytest
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import api.oauth as oauth_module
@@ -122,6 +124,118 @@ async def test_oauth_callback_persists_tokens_and_issues_session(mocker):
     assert stored.divar_access_token == "divar-access"
     assert stored.divar_refresh_token == "divar-refresh"
     assert 604790 <= (stored.token_expires_at - before).total_seconds() <= 604810
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_recovers_from_concurrent_token_insert(mocker):
+    barrier = asyncio.Barrier(2)
+    state = {"commit_count": 0, "row": None}
+
+    class RaceDB:
+        def __init__(self):
+            self.added = None
+            self.commit_count = 0
+            self.rollback = mocker.AsyncMock()
+
+        async def execute(self, _statement):
+            if self.added is None:
+                result = mocker.Mock()
+                result.scalar_one_or_none.return_value = None
+                return result
+            result = mocker.Mock()
+            result.scalar_one.return_value = state["row"]
+            return result
+
+        def add(self, value):
+            self.added = value
+
+        async def commit(self):
+            self.commit_count += 1
+            if self.commit_count > 1:
+                return
+            await barrier.wait()
+            state["commit_count"] += 1
+            if state["commit_count"] == 1:
+                state["row"] = self.added
+                return
+            raise IntegrityError("duplicate client_id", {}, Exception("duplicate"))
+
+    token_response = mocker.Mock()
+    token_response.raise_for_status.return_value = None
+    token_response.json.side_effect = [
+        {
+            "access_token": "divar-access-1",
+            "refresh_token": "divar-refresh-1",
+            "expires_in": 604800,
+        },
+        {
+            "access_token": "divar-access-2",
+            "refresh_token": "divar-refresh-2",
+            "expires_in": 604800,
+        },
+    ]
+    mocker.patch.object(
+        divar_service,
+        "client",
+        new=SimpleNamespace(
+            post=mocker.AsyncMock(return_value=token_response)
+        ),
+    )
+    mocker.patch.object(
+        divar_service,
+        "get_user",
+        new=mocker.AsyncMock(
+            return_value={
+                "phone_number": "09123456789",
+                "user_id": "divar-user-1",
+            }
+        ),
+    )
+    mocker.patch.object(
+        oauth_module,
+        "find_or_create_client",
+        new=mocker.AsyncMock(return_value=SimpleNamespace(id=7)),
+    )
+    mocker.patch.object(
+        oauth_module,
+        "issue_session",
+        new=mocker.AsyncMock(
+            return_value={"access_token": "app-access", "expires_in": 1800}
+        ),
+    )
+    oauth_module._login_states.update(
+        {
+            "state-1": oauth_module.time.time() + 600,
+            "state-2": oauth_module.time.time() + 600,
+        }
+    )
+    dbs = [RaceDB(), RaceDB()]
+
+    results = await asyncio.gather(
+        oauth_module.oauth_callback(
+            _request("state=state-1&code=authorization-code-1"), Response(), dbs[0]
+        ),
+        oauth_module.oauth_callback(
+            _request("state=state-2&code=authorization-code-2"), Response(), dbs[1]
+        ),
+    )
+
+    assert results == [
+        TokenResponse(access_token="app-access", expires_in=1800),
+        TokenResponse(access_token="app-access", expires_in=1800),
+    ]
+    assert state["row"] is not None
+    assert state["row"].client_id == 7
+    assert state["row"].divar_access_token in {
+        "divar-access-1",
+        "divar-access-2",
+    }
+    assert state["row"].divar_refresh_token in {
+        "divar-refresh-1",
+        "divar-refresh-2",
+    }
+    assert state["row"].token_expires_at is not None
+    assert dbs[0].rollback.await_count + dbs[1].rollback.await_count == 1
 
 
 @pytest.mark.asyncio

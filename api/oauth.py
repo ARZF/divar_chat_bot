@@ -8,6 +8,7 @@ import httpx
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import find_or_create_client, issue_session
@@ -157,11 +158,24 @@ async def oauth_callback(
             token_expires_at=token_expires_at,
         )
         db.add(oauth_token)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            oauth_token = (
+                await db.execute(
+                    select(OAuthToken).where(OAuthToken.client_id == client.id)
+                )
+            ).scalar_one()
+            oauth_token.divar_access_token = access_token
+            oauth_token.divar_refresh_token = refresh_token
+            oauth_token.token_expires_at = token_expires_at
+            await db.commit()
     else:
         oauth_token.divar_access_token = access_token
         oauth_token.divar_refresh_token = refresh_token
         oauth_token.token_expires_at = token_expires_at
-    await db.commit()
+        await db.commit()
 
     session = await issue_session(db, client, response)
     # TEMPORARY: return the same JSON contract as OTP login because no seller
