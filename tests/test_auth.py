@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 # Set test env vars before any project imports — config.py instantiates Settings at
@@ -18,7 +19,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException, Response
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -256,6 +259,65 @@ def test_refresh_rotates_token_and_returns_new_access_token(client, sms):
 def test_refresh_without_cookie_returns_401(client):
     resp = client.post("/auth/refresh")
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_concurrent_refresh_calls_claim_token_once(tmp_path, mocker):
+    database_path = tmp_path / "refresh-race.db"
+    race_engine = create_async_engine(
+        f"sqlite+aiosqlite:///{database_path}",
+        connect_args={"timeout": 10},
+    )
+    race_sessions = async_sessionmaker(
+        race_engine, class_=AsyncSession, expire_on_commit=False
+    )
+    async with race_engine.begin() as conn:
+        await conn.run_sync(
+            lambda c: Client.metadata.create_all(
+                c, tables=[Client.__table__, RefreshToken.__table__]
+            )
+        )
+
+    token = "single-use-refresh-token"
+    async with race_sessions() as seed_db:
+        seeded_client = Client(phone_number="09120000001")
+        seed_db.add(seeded_client)
+        await seed_db.flush()
+        seed_db.add(
+            RefreshToken(
+                client_id=seeded_client.id,
+                token_hash=auth_module._hash_refresh_token(token),
+                expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+            )
+        )
+        await seed_db.commit()
+
+    async def refresh_once():
+        async with race_sessions() as race_db:
+            try:
+                result = await auth_module.refresh_session(
+                    Response(), db=race_db, refresh_token=token
+                )
+                return 200, result
+            except HTTPException as exc:
+                return exc.status_code, None
+
+    async def stub_issue_session(db, client, response):
+        return {"access_token": f"access-{client.id}", "expires_in": 1800}
+
+    issue_session = mocker.patch.object(
+        auth_module, "issue_session", side_effect=stub_issue_session
+    )
+
+    try:
+        results = await asyncio.gather(refresh_once(), refresh_once())
+        assert sorted(status for status, _ in results) == [200, 401]
+        success = next(result for status, result in results if status == 200)
+        assert success.access_token == "access-1"
+        assert success.expires_in == 1800
+        issue_session.assert_awaited_once()
+    finally:
+        await race_engine.dispose()
 
 
 def test_logout_deletes_refresh_token(client, sms):

@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -317,22 +317,21 @@ async def refresh_session(
 
     now = _now()
     token_hash = _hash_refresh_token(refresh_token)
-    result = await db.execute(
-        select(RefreshToken).where(
+    claim_stmt = (
+        delete(RefreshToken)
+        .where(
             RefreshToken.token_hash == token_hash,
             RefreshToken.expires_at > now,
         )
+        .returning(RefreshToken.client_id)
     )
-    row = result.scalar_one_or_none()
-    if row is None:
+    claimed = (await db.execute(claim_stmt)).scalars().all()
+    if len(claimed) != 1:
+        await db.rollback()
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
-
-    # Rotate: delete the old row, then issue a fresh session (new token + cookie + JWT).
-    client_id = row.client_id
-    await db.delete(row)
     await db.commit()
 
-    client_result = await db.execute(select(Client).where(Client.id == client_id))
+    client_result = await db.execute(select(Client).where(Client.id == claimed[0]))
     client = client_result.scalar_one_or_none()
     if client is None:
         raise HTTPException(status_code=401, detail="Client not found")
