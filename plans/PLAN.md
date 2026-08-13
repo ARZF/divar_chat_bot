@@ -39,7 +39,7 @@ the split is to avoid reading the *entire* history for every task, not to hide i
 
 > Set this manually before each coding session.
 > **Current: Phase 2** (Phase 1 complete including all bugfixes 1.B1, 1.B2, 1.B3.
-> Build order: ~~2.2~~ → ~~2.8~~ → ~~2.7~~ → ~~2.3~~ → (~~2.1~~ ∥ ~~2.4~~ ∥ ~~2.6~~) → ~~2.5~~ → 2.7 admin rework)
+> Build order: ~~2.2~~ → 2.8 partial (OTP/SMS deferred; see `CHECKLISTS.md`) → ~~2.7~~ → ~~2.3~~ → (~~2.1~~ ∥ ~~2.4~~ ∥ ~~2.6~~) → ~~2.5~~ → 2.7 admin rework)
 >
 > **For this phase, read `PHASE2.md`** — the `## 2.7` admin rework is next per build order.
 > §2.9's gate (2.1, 2.4, 2.5, 2.6 complete) is now satisfied, so it is unblocked too.
