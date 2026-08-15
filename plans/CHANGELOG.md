@@ -4,6 +4,38 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-08-16** — Closed the **models → services inverted-layering item** left open in
+  the 2026-08-11 §2.6 entry, and verified that the enum move produces no schema drift.
+
+  **Dependency correction.** `ConversationState` was moved verbatim from
+  `services/state_machine.py` to the new `models/enums.py`. `models/conversation.py` now
+  imports only from `models.enums`; the model layer no longer imports any `services.*`
+  module. This restores the project's dependency direction: services → models, never the
+  reverse, removing the latent import-cycle risk that was expected to surface first during
+  Alembic autogenerate.
+
+  **Backward compatibility.** `services/state_machine.py` imports and re-exports
+  `ConversationState` from `models.enums`. Existing importers in `services/chatbot.py` and
+  `tests/test_chatbot.py` therefore required no changes, and the transition table continues
+  to use the same enum members and values. `TRANSITIONS` and `INTENT_EVENTS` were not
+  changed.
+
+  **Schema verification.** A live PostgreSQL autogenerate check was not possible in this
+  environment: the configured database is `postgresql+asyncpg://divar:divar@localhost:5432/divar`,
+  but PostgreSQL was unreachable and Docker was unavailable. The required static fallback
+  was run instead. The current SQLAlchemy metadata reports `Conversation.current_state` as
+  `String(50)`, `nullable=False`, Python-side default `'START'`, and `server_default=None`.
+  The `current_state` definition in the pre-move and post-move model source is identical.
+  Migration history remains unchanged with `0004` (`globally_unique_divar_conversation_id`)
+  as the expected head. No throwaway or committed migration was generated.
+
+  **Test evidence.** The enum-move commit's verification remains valid: the full suite
+  passed with **151 tests**, and the enum identity check confirmed that the model import,
+  `models.enums`, and the `services.state_machine` re-export resolve to the same enum object.
+  The focused state-machine and integration checks also passed. This closes the 2026-08-11
+  open layering item. The separate `services/state_machine.py` tree-drift note in that older
+  entry is historical and unrelated to this correction; it remains as written.
+
 - **2026-08-13** — Fixed two **§2.2 conversation-resolution defects** found in the Phase 2
   audit, plus the schema correction the second one needed.
 

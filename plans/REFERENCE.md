@@ -127,6 +127,11 @@ import ...` not `from app.services.divar import ...`).
   per-client flow must request it explicitly every time, since every new seller needs their
   own refresh token.
 
+### `models/enums.py` — EXISTS
+- Contains `ConversationState`, moved verbatim from `services/state_machine.py` to keep the
+  dependency direction services → models. `services/state_machine.py` re-exports it for
+  existing importers; see `CHANGELOG.md` 2026-08-16.
+
 ### `requirements.txt` — EXISTS, needs updating for Phase 2
 Current (Phase 1):
 ```
@@ -193,6 +198,7 @@ app/
 │   ├── admin.py          # Phase 1
 │   └── seller.py         # Phase 2 (2.7) — post-token register request/response
 ├── models/               # Phase 2 only — do not create earlier
+│   ├── enums.py           # ConversationState (moved from services/state_machine.py; see CHANGELOG 2026-08-16)
 │   ├── client.py
 │   ├── oauth_token.py     # Phase 2 (2.8) — Divar OAuth tokens per client
 │   ├── otp_code.py        # Phase 2 (2.8) — pending OTP codes
