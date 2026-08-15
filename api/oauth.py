@@ -60,7 +60,11 @@ async def oauth_start() -> RedirectResponse:
         "response_type": "code",
         "client_id": settings.DIVAR_APP_SLUG,
         "redirect_uri": settings.DIVAR_REDIRECT_URI,
-        "scope": "USER_PHONE USER_ID offline_access",
+        "scope": (
+            "USER_PHONE USER_ID offline_access "
+            "CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND "
+            "CHAT_SUPPLIER_ALL_CONVERSATIONS_READ"
+        ),
         "state": state,
     }
     auth_url = f"https://oauth.divar.ir/oauth2/auth?{urlencode(params)}"

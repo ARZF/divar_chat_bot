@@ -54,7 +54,11 @@ async def test_oauth_start_redirects_and_stores_state_for_ten_minutes(mocker):
         "response_type": ["code"],
         "client_id": [settings.DIVAR_APP_SLUG],
         "redirect_uri": [settings.DIVAR_REDIRECT_URI],
-        "scope": ["USER_PHONE USER_ID offline_access"],
+        "scope": [
+            "USER_PHONE USER_ID offline_access "
+            "CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND "
+            "CHAT_SUPPLIER_ALL_CONVERSATIONS_READ"
+        ],
         "state": ["state-1"],
     }
     assert oauth_module._login_states == {"state-1": 1_600.0}
