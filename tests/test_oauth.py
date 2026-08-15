@@ -17,6 +17,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("JWT_SECRET_KEY", "test_jwt_secret_key")
 os.environ.setdefault("OTP_HMAC_KEY", "test_otp_hmac_key")
 
+import httpx
 import pytest
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -62,6 +63,59 @@ async def test_oauth_start_redirects_and_stores_state_for_ten_minutes(mocker):
         "state": ["state-1"],
     }
     assert oauth_module._login_states == {"state-1": 1_600.0}
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_issues_session_when_subscription_registration_fails(mocker):
+    oauth_module._login_states["state-1"] = oauth_module.time.time() + 600
+    token_response = mocker.Mock()
+    token_response.raise_for_status.return_value = None
+    token_response.json.return_value = {
+        "access_token": "divar-access",
+        "refresh_token": "divar-refresh",
+        "expires_in": 604800,
+    }
+    mocker.patch.object(
+        divar_service,
+        "client",
+        new=SimpleNamespace(post=mocker.AsyncMock(return_value=token_response)),
+    )
+    mocker.patch.object(
+        divar_service,
+        "get_user",
+        new=mocker.AsyncMock(
+            return_value={"phone_number": "09123456789", "user_id": "divar-user-1"}
+        ),
+    )
+    mocker.patch.object(
+        oauth_module,
+        "find_or_create_client",
+        new=mocker.AsyncMock(return_value=SimpleNamespace(id=7)),
+    )
+    issue_session = mocker.patch.object(
+        oauth_module,
+        "issue_session",
+        new=mocker.AsyncMock(
+            return_value={"access_token": "app-access", "expires_in": 1800}
+        ),
+    )
+    mocker.patch.object(
+        divar_service,
+        "register_event_subscription",
+        new=mocker.AsyncMock(side_effect=httpx.HTTPError("registration failed")),
+    )
+    result_proxy = mocker.Mock()
+    result_proxy.scalar_one_or_none.return_value = None
+    db = mocker.MagicMock(spec=AsyncSession)
+    db.execute = mocker.AsyncMock(return_value=result_proxy)
+    db.commit = mocker.AsyncMock()
+
+    result = await oauth_module.oauth_callback(
+        _request("state=state-1&code=authorization-code"), Response(), db
+    )
+
+    assert result == TokenResponse(access_token="app-access", expires_in=1800)
+    issue_session.assert_awaited_once()
 
 
 @pytest.mark.asyncio

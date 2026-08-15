@@ -181,6 +181,19 @@ async def oauth_callback(
         oauth_token.token_expires_at = token_expires_at
         await db.commit()
 
+    try:
+        await divar_service.register_event_subscription(access_token)
+    except httpx.HTTPError:
+        # Without a successful registration, this seller's NEW_MESSAGE events will
+        # not arrive until registration succeeds; there is no automatic retry yet.
+        logger.warning(
+            "Seller event subscription registration failed",
+            extra={"client_id": client.id},
+            exc_info=True,
+        )
+    # TODO: Re-register after every token refresh per PHASE2.md §2.9; token-refresh
+    # scheduling infrastructure does not exist yet.
+
     session = await issue_session(db, client, response)
     # TEMPORARY: return the same JSON contract as OTP login because no seller
     # frontend/panel callback URL exists yet. Replace this with RedirectResponse once
