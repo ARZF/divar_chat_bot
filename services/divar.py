@@ -141,6 +141,34 @@ async def send_supplier_message(
     return True
 
 
+async def register_event_subscription(access_token: str) -> bool:
+    url = f"{BASE_URL}/v1/open-platform/events/subscriptions"
+    payload = {"event_type": "NEW_MESSAGE_ON_POST"}
+
+    response = await client.post(
+        url,
+        headers=_oauth_headers(access_token),
+        json=payload,
+    )
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        logger.error(
+            "register_event_subscription failed",
+            extra={
+                "status_code": response.status_code,
+                "response_body": response.text,
+            },
+        )
+        raise
+
+    logger.debug(
+        "register_event_subscription succeeded",
+        extra={"status_code": response.status_code},
+    )
+    return True
+
+
 async def get_conversation(conversation_id: str) -> dict:
     url = f"{BASE_URL}/v1/open-platform/chat/conversations/{conversation_id}"
     response = await client.get(url, headers=_api_key_headers())

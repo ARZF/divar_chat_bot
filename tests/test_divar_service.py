@@ -45,6 +45,39 @@ def httpx_mock():
         yield router
 
 
+SUBSCRIPTION_URL = f"{divar.BASE_URL}/v1/open-platform/events/subscriptions"
+
+
+@pytest.mark.asyncio
+async def test_register_event_subscription_success(httpx_mock):
+    route = httpx_mock.post(SUBSCRIPTION_URL).respond(201, json={"status": "ok"})
+
+    assert await divar.register_event_subscription("seller_access_token") is True
+
+    request = route.calls[0].request
+    assert request.headers["x-api-key"] == "test_api_key"
+    assert request.headers["authorization"] == "Bearer seller_access_token"
+    assert json.loads(request.content) == {"event_type": "NEW_MESSAGE_ON_POST"}
+
+
+@pytest.mark.asyncio
+async def test_register_event_subscription_failure_logs_and_reraises(
+    httpx_mock, caplog
+):
+    httpx_mock.post(SUBSCRIPTION_URL).respond(500, text="subscription failed")
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await divar.register_event_subscription("seller_access_token")
+
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "register_event_subscription failed"
+    )
+    assert record.status_code == 500
+    assert record.response_body == "subscription failed"
+
+
 # ---------------------------------------------------------------------------
 # send_message
 # ---------------------------------------------------------------------------
