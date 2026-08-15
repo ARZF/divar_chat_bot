@@ -126,6 +126,21 @@ async def send_message(conversation_id: str, text: str) -> bool:
     return True
 
 
+async def send_supplier_message(
+    conversation_id: str, text: str, access_token: str
+) -> bool:
+    url = f"{BASE_URL}/v2/open-platform/conversations/{conversation_id}/messages"
+    payload = {"type": "TEXT", "message": text}
+
+    response = await client.post(
+        url,
+        headers=_oauth_headers(access_token),
+        json=payload,
+    )
+    response.raise_for_status()
+    return True
+
+
 async def get_conversation(conversation_id: str) -> dict:
     url = f"{BASE_URL}/v1/open-platform/chat/conversations/{conversation_id}"
     response = await client.get(url, headers=_api_key_headers())

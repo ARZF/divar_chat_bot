@@ -14,6 +14,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
+
 from main import app
 from config import settings
 
@@ -35,6 +36,30 @@ def _valid_payload(
             "sender": {"type": "HUMAN"},
             "type": "TEXT",
             "sent_at": "2024-10-20T12:00:00Z",
+        },
+    }
+
+
+def _new_message_payload(
+    *,
+    sender_side="BUYER",
+    text="آیا موجود است؟",
+    conversation_id="post_conv_123",
+    post_token="gZd7omnS",
+):
+    return {
+        "type": "NEW_MESSAGE",
+        "new_message": {
+            "id": "msg_post_001",
+            "conversation": {
+                "id": conversation_id,
+                "type": "POST",
+                "post_token": post_token,
+            },
+            "sender": {"side": sender_side, "type": "HUMAN"},
+            "type": "TEXT",
+            "sent_at": 1729429926140000,
+            "text": text,
         },
     }
 
@@ -200,3 +225,57 @@ def test_realistic_divar_webhook_payload(client, mocker):
         "62c82c02-6a71-4501-a1fd-4bf226b3aa78",
         "hello world",
     )
+
+
+# ---------------------------------------------------------------------------
+# Supplier-wide post chat (NEW_MESSAGE)
+# ---------------------------------------------------------------------------
+
+
+def test_new_message_buyer_schedules_supplier_handler(client, mocker):
+    mock_handle = mocker.patch("api.webhook.handle_supplier_message")
+
+    response = client.post(
+        "/api/v1/webhook",
+        json=_new_message_payload(),
+        headers={"Authorization": WEBHOOK_SECRET},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    mock_handle.assert_called_once_with(
+        "post_conv_123", "gZd7omnS", "آیا موجود است؟"
+    )
+
+
+
+def test_new_message_seller_is_no_op(client, mocker):
+    mock_handle = mocker.patch("api.webhook.handle_supplier_message")
+
+    response = client.post(
+        "/api/v1/webhook",
+        json=_new_message_payload(sender_side="SELLER"),
+        headers={"Authorization": WEBHOOK_SECRET},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+    mock_handle.assert_not_called()
+
+
+
+def test_new_message_schedules_unresolved_post_for_background_handling(client, mocker):
+    mock_handle = mocker.patch("api.webhook.handle_supplier_message")
+
+    response = client.post(
+        "/api/v1/webhook",
+        json=_new_message_payload(
+            conversation_id="unknown_conv",
+            post_token="unknown1",
+        ),
+        headers={"Authorization": WEBHOOK_SECRET},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    mock_handle.assert_called_once_with("unknown_conv", "unknown1", "آیا موجود است؟")

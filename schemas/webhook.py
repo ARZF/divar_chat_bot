@@ -12,6 +12,7 @@ class ConversationSchema(BaseModel):
 
 class EventType(str, Enum):
     NEW_CHATBOT_MESSAGE = "NEW_CHATBOT_MESSAGE"
+    NEW_MESSAGE = "NEW_MESSAGE"
 
 class SenderSchema(BaseModel):
     side: Optional[str] = None
@@ -27,7 +28,17 @@ class NewChatbotMessageSchema(BaseModel):
     text: Optional[str] = None
 
 
+class ChatMessage(BaseModel):
+    id: str
+    conversation: ConversationSchema
+    sender: SenderSchema
+    type: str
+    sent_at: int
+    text: Optional[str] = None
+
+
 class WebhookSchema(BaseModel):
     type: EventType
     metadata: Optional[Dict[str, Any]] = None
     new_chatbot_message: Optional[NewChatbotMessageSchema] = None
+    new_message: Optional[ChatMessage] = None

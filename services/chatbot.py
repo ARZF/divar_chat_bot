@@ -232,6 +232,44 @@ def _extract_product_name(normalized_text: str) -> str:
 # ---------------------------------------------------------------------------
 # Main orchestrator — opens its own DB session (BackgroundTask-safe)
 # ---------------------------------------------------------------------------
+async def handle_supplier_message(
+    conversation_id: str, post_token: str, text: str
+) -> None:
+    """Resolve a supplier post chat and log the currently stubbed reply."""
+    client_id_var.set("-")
+    conversation_id_var.set(conversation_id)
+
+    async with AsyncSessionLocal() as db:
+        client_id = (
+            await db.execute(
+                select(Post.client_id).where(Post.post_token == post_token)
+            )
+        ).scalar_one_or_none()
+
+    if client_id is None:
+        logger.warning(
+            "NEW_MESSAGE post_token did not resolve to a client",
+            extra={
+                "post_token": post_token,
+                "conversation_id": conversation_id,
+            },
+        )
+        return
+
+    client_id_var.set(str(client_id))
+    # TODO: Known stub: retrieve this seller's OAuth access token, then call
+    # send_supplier_message(conversation_id, text, access_token).
+    logger.info(
+        "would send supplier message",
+        extra={
+            "client_id": client_id,
+            "conversation_id": conversation_id,
+            "text": text,
+            "send_method": "send_supplier_message",
+        },
+    )
+
+
 async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
     """Process a user message and send the appropriate response.
 

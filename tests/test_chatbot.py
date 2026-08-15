@@ -13,6 +13,7 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.pool import StaticPool
 
 from config import settings
+from logging_config import client_id_var, conversation_id_var
 from models.client import Client
 from models.conversation import Conversation
 from models.post import Post
@@ -470,6 +471,64 @@ async def test_handle_bot_reply_opens_its_own_session(
     # No real HTTP call happened; the welcome reply went out on the new conversation.
     sent_texts = [call.args[1] for call in send_message.await_args_list]
     assert settings.WELCOME_MESSAGE in sent_texts
+
+
+@pytest.mark.asyncio
+async def test_handle_supplier_message_resolves_post_and_sets_context(
+    monkeypatch, session_factory, seeded_post, caplog
+):
+    client, post = seeded_post
+    tracked_context = _TrackedSessionContext(session_factory)
+    mock_session_local = MagicMock(return_value=tracked_context)
+    monkeypatch.setattr(chatbot, "AsyncSessionLocal", mock_session_local)
+
+    client_id_var.set("stale-client")
+    conversation_id_var.set("stale-conversation")
+    with caplog.at_level(logging.INFO, logger="chatbot"):
+        await chatbot.handle_supplier_message(
+            "supplier-conversation", post.post_token, "آیا موجود است؟"
+        )
+
+    mock_session_local.assert_called_once_with()
+    assert tracked_context.aenter_calls == 1
+    assert tracked_context.aexit_calls == 1
+    assert client_id_var.get() == str(client.id)
+    assert conversation_id_var.get() == "supplier-conversation"
+    stub_record = next(
+        record for record in caplog.records
+        if record.message == "would send supplier message"
+    )
+    assert stub_record.client_id == str(client.id)
+    assert stub_record.conversation_id == "supplier-conversation"
+    assert stub_record.text == "آیا موجود است؟"
+    assert stub_record.send_method == "send_supplier_message"
+
+
+@pytest.mark.asyncio
+async def test_handle_supplier_message_unresolved_logs_warning_and_resets_context(
+    monkeypatch, session_factory, caplog
+):
+    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    client_id_var.set("stale-client")
+    conversation_id_var.set("stale-conversation")
+
+    with caplog.at_level(logging.WARNING, logger="chatbot"):
+        await chatbot.handle_supplier_message(
+            "unknown-conversation", "unknown-post", "hello"
+        )
+
+    assert client_id_var.get() == "-"
+    assert conversation_id_var.get() == "unknown-conversation"
+    warning = next(
+        record for record in caplog.records
+        if record.message == "NEW_MESSAGE post_token did not resolve to a client"
+    )
+    assert warning.post_token == "unknown-post"
+    assert warning.conversation_id == "unknown-conversation"
+    assert not any(
+        record.message == "would send supplier message"
+        for record in caplog.records
+    )
 
 
 # ---------------------------------------------------------------------------
