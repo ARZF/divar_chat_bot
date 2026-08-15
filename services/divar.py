@@ -79,7 +79,9 @@ async def get_user_phone_number(access_token: str) -> str | None:
     return user["phone_number"] if user is not None else None
 
 
-async def refresh_access_token(current_access_token: str) -> tuple[str, str]:
+async def refresh_access_token(
+    current_access_token: str,
+) -> tuple[str, str, int]:
     response = await client.post(
         "https://oauth.divar.ir/oauth2/token",
         data={
@@ -93,7 +95,11 @@ async def refresh_access_token(current_access_token: str) -> tuple[str, str]:
     )
     response.raise_for_status()
     token_data = response.json()
-    return token_data["access_token"], token_data["refresh_token"]
+    return (
+        token_data["access_token"],
+        token_data["refresh_token"],
+        int(token_data["expires_in"]),
+    )
 
 
 async def send_message(conversation_id: str, text: str) -> bool:
@@ -137,7 +143,22 @@ async def send_supplier_message(
         headers=_oauth_headers(access_token),
         json=payload,
     )
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        logger.error(
+            "send_supplier_message failed",
+            extra={
+                "status_code": response.status_code,
+                "response_body": response.text,
+            },
+        )
+        raise
+
+    logger.debug(
+        "send_supplier_message succeeded",
+        extra={"status_code": response.status_code},
+    )
     return True
 
 

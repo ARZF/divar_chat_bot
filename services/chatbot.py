@@ -283,8 +283,8 @@ async def handle_supplier_message(
         token_expires_at = token_expires_at.replace(tzinfo=timezone.utc)
     if token_expires_at <= datetime.now(timezone.utc):
         try:
-            access_token, refresh_token = await divar_service.refresh_access_token(
-                access_token
+            access_token, refresh_token, expires_in = (
+                await divar_service.refresh_access_token(access_token)
             )
         except httpx.HTTPError:
             logger.error(
@@ -303,7 +303,7 @@ async def handle_supplier_message(
             oauth_token.divar_access_token = access_token
             oauth_token.divar_refresh_token = refresh_token
             oauth_token.token_expires_at = datetime.now(timezone.utc) + timedelta(
-                days=7
+                seconds=expires_in
             )
             await db.commit()
         # TODO: Re-register the event subscription after refresh per PHASE2.md §2.9's

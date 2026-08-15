@@ -558,12 +558,16 @@ async def test_handle_supplier_message_refreshes_expired_token_before_sending(
         await seed_db.commit()
 
     monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
-    refresh = AsyncMock(return_value=("new-access", "new-refresh"))
+    refresh = AsyncMock(return_value=("new-access", "new-refresh", 37))
     send_supplier_message = AsyncMock()
     monkeypatch.setattr(chatbot.divar_service, "refresh_access_token", refresh)
     monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", send_supplier_message)
 
-    await chatbot.handle_supplier_message("supplier-conversation", post.post_token, "hello")
+    before_refresh = datetime.now(timezone.utc)
+    await chatbot.handle_supplier_message(
+        "supplier-conversation", post.post_token, "hello"
+    )
+    after_refresh = datetime.now(timezone.utc)
 
     refresh.assert_awaited_once_with("old-access")
     send_supplier_message.assert_awaited_once_with(
@@ -575,7 +579,12 @@ async def test_handle_supplier_message_refreshes_expired_token_before_sending(
         ).scalar_one()
         assert stored.divar_access_token == "new-access"
         assert stored.divar_refresh_token == "new-refresh"
-        assert stored.token_expires_at > datetime.now().replace(tzinfo=None)
+        assert stored.token_expires_at >= (before_refresh + timedelta(seconds=37)).replace(
+            tzinfo=None
+        )
+        assert stored.token_expires_at <= (after_refresh + timedelta(seconds=37)).replace(
+            tzinfo=None
+        )
 
 
 @pytest.mark.asyncio

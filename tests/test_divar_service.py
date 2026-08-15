@@ -232,6 +232,51 @@ async def test_get_conversation_401_logs_api_key_error(httpx_mock, caplog):
 
 
 # ---------------------------------------------------------------------------
+# send_supplier_message logging
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_supplier_message_success_logs_debug(httpx_mock, caplog):
+    url = f"{divar.BASE_URL}/v2/open-platform/conversations/conv_123/messages"
+    httpx_mock.post(url).respond(200, json={"status": "ok"})
+
+    with caplog.at_level("DEBUG", logger="divar"):
+        assert await divar.send_supplier_message(
+            "conv_123", "Hello", "seller_access_token"
+        ) is True
+
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "send_supplier_message succeeded"
+    )
+    assert record.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_send_supplier_message_failure_logs_error_and_reraises(
+    httpx_mock, caplog
+):
+    url = f"{divar.BASE_URL}/v2/open-platform/conversations/conv_123/messages"
+    httpx_mock.post(url).respond(502, text="Bad Gateway")
+
+    with caplog.at_level("ERROR", logger="divar"):
+        with pytest.raises(httpx.HTTPStatusError):
+            await divar.send_supplier_message(
+                "conv_123", "Hello", "seller_access_token"
+            )
+
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "send_supplier_message failed"
+    )
+    assert record.status_code == 502
+    assert record.response_body == "Bad Gateway"
+
+
+# ---------------------------------------------------------------------------
 # get_user / get_user_phone_number — section 2.3
 # ---------------------------------------------------------------------------
 
@@ -305,19 +350,20 @@ async def test_refresh_access_token_correct_post_fix_behavior(httpx_mock):
     - Request body includes `code` (current access token), `redirect_uri`,
       `client_id` (=DIVAR_APP_SLUG), `client_secret`, `grant_type=refresh_token`,
       `refresh_token`
-    - Returns a tuple of (new_access_token, new_refresh_token)
+    - Returns a tuple of (new_access_token, new_refresh_token, expires_in)
     """
     route = httpx_mock.post(TOKEN_URL).respond(
         200,
         json={
             "access_token": "new_access_token",
             "refresh_token": "new_refresh_token",
+            "expires_in": "1234",
         },
     )
 
     result = await divar.refresh_access_token(settings.DIVAR_ACCESS_TOKEN)
 
-    assert result == ("new_access_token", "new_refresh_token")
+    assert result == ("new_access_token", "new_refresh_token", 1234)
     assert route.called
     request = route.calls[0].request
     body = parse_qs(request.content.decode())
