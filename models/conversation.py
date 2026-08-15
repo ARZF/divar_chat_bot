@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from models.base import Base
-from services.state_machine import ConversationState
+from models.enums import ConversationState
 
 if TYPE_CHECKING:
     from models.client import Client

@@ -1,12 +1,5 @@
-from enum import StrEnum
+from models.enums import ConversationState
 
-
-class ConversationState(StrEnum):
-    START = "START"
-    MAIN_MENU = "MAIN_MENU"
-    PRICE_MENU = "PRICE_MENU"
-    SERVICE_MENU = "SERVICE_MENU"
-    HUMAN_SUPPORT = "HUMAN_SUPPORT"
 
 TRANSITIONS = {
     ConversationState.START: {
