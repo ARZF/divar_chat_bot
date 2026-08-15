@@ -1,7 +1,10 @@
 # Env vars for config.py are set by the root conftest.py before collection.
 import inspect
 import logging
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
+
+import httpx
 
 import pytest
 import pytest_asyncio
@@ -16,6 +19,7 @@ from config import settings
 from logging_config import client_id_var, conversation_id_var
 from models.client import Client
 from models.conversation import Conversation
+from models.oauth_token import OAuthToken
 from models.post import Post
 from models.product import Product
 import services.chatbot as chatbot
@@ -63,6 +67,7 @@ async def session_factory():
         Client.__table__,
         Post.__table__,
         Conversation.__table__,
+        OAuthToken.__table__,
         Product.__table__,
     ]
     async with engine.begin() as connection:
@@ -474,13 +479,26 @@ async def test_handle_bot_reply_opens_its_own_session(
 
 
 @pytest.mark.asyncio
-async def test_handle_supplier_message_resolves_post_and_sets_context(
+async def test_handle_supplier_message_resolves_post_and_sends_reply(
     monkeypatch, session_factory, seeded_post, caplog
 ):
     client, post = seeded_post
+    async with session_factory() as seed_db:
+        seed_db.add(
+            OAuthToken(
+                client_id=client.id,
+                divar_access_token="access-token",
+                divar_refresh_token="refresh-token",
+                token_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+            )
+        )
+        await seed_db.commit()
+
     tracked_context = _TrackedSessionContext(session_factory)
     mock_session_local = MagicMock(return_value=tracked_context)
     monkeypatch.setattr(chatbot, "AsyncSessionLocal", mock_session_local)
+    send_supplier_message = AsyncMock()
+    monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", send_supplier_message)
 
     client_id_var.set("stale-client")
     conversation_id_var.set("stale-conversation")
@@ -489,19 +507,109 @@ async def test_handle_supplier_message_resolves_post_and_sets_context(
             "supplier-conversation", post.post_token, "آیا موجود است؟"
         )
 
-    mock_session_local.assert_called_once_with()
-    assert tracked_context.aenter_calls == 1
-    assert tracked_context.aexit_calls == 1
+    send_supplier_message.assert_awaited_once_with(
+        "supplier-conversation", "آیا موجود است؟", "access-token"
+    )
     assert client_id_var.get() == str(client.id)
     assert conversation_id_var.get() == "supplier-conversation"
-    stub_record = next(
-        record for record in caplog.records
-        if record.message == "would send supplier message"
+    sent_record = next(
+        record for record in caplog.records if record.message == "supplier reply sent"
     )
-    assert stub_record.client_id == str(client.id)
-    assert stub_record.conversation_id == "supplier-conversation"
-    assert stub_record.text == "آیا موجود است؟"
-    assert stub_record.send_method == "send_supplier_message"
+    assert str(sent_record.client_id) == str(client.id)
+    assert sent_record.conversation_id == "supplier-conversation"
+
+
+@pytest.mark.asyncio
+async def test_handle_supplier_message_missing_oauth_token_does_not_send(
+    monkeypatch, session_factory, seeded_post, caplog
+):
+    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    send_supplier_message = AsyncMock()
+    monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", send_supplier_message)
+
+    with caplog.at_level(logging.WARNING, logger="chatbot"):
+        await chatbot.handle_supplier_message(
+            "supplier-conversation", seeded_post[1].post_token, "hello"
+        )
+
+    send_supplier_message.assert_not_awaited()
+    warning = next(
+        record for record in caplog.records
+        if record.message == "supplier message skipped: OAuth token missing"
+    )
+    assert str(warning.client_id) == str(seeded_post[0].id)
+    assert warning.conversation_id == "supplier-conversation"
+
+
+@pytest.mark.asyncio
+async def test_handle_supplier_message_refreshes_expired_token_before_sending(
+    monkeypatch, session_factory, seeded_post
+):
+    client, post = seeded_post
+    async with session_factory() as seed_db:
+        seed_db.add(
+            OAuthToken(
+                client_id=client.id,
+                divar_access_token="old-access",
+                divar_refresh_token="old-refresh",
+                token_expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+            )
+        )
+        await seed_db.commit()
+
+    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    refresh = AsyncMock(return_value=("new-access", "new-refresh"))
+    send_supplier_message = AsyncMock()
+    monkeypatch.setattr(chatbot.divar_service, "refresh_access_token", refresh)
+    monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", send_supplier_message)
+
+    await chatbot.handle_supplier_message("supplier-conversation", post.post_token, "hello")
+
+    refresh.assert_awaited_once_with("old-access")
+    send_supplier_message.assert_awaited_once_with(
+        "supplier-conversation", "hello", "new-access"
+    )
+    async with session_factory() as verify_db:
+        stored = (
+            await verify_db.execute(select(OAuthToken).where(OAuthToken.client_id == client.id))
+        ).scalar_one()
+        assert stored.divar_access_token == "new-access"
+        assert stored.divar_refresh_token == "new-refresh"
+        assert stored.token_expires_at > datetime.now().replace(tzinfo=None)
+
+
+@pytest.mark.asyncio
+async def test_handle_supplier_message_send_http_error_is_logged_and_suppressed(
+    monkeypatch, session_factory, seeded_post, caplog
+):
+    client, post = seeded_post
+    async with session_factory() as seed_db:
+        seed_db.add(
+            OAuthToken(
+                client_id=client.id,
+                divar_access_token="access-token",
+                divar_refresh_token="refresh-token",
+                token_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+            )
+        )
+        await seed_db.commit()
+
+    response = httpx.Response(502, request=httpx.Request("POST", "https://example.com"))
+    error = httpx.HTTPStatusError("send failed", request=response.request, response=response)
+    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    monkeypatch.setattr(
+        chatbot.divar_service,
+        "send_supplier_message",
+        AsyncMock(side_effect=error),
+    )
+
+    with caplog.at_level(logging.ERROR, logger="chatbot"):
+        await chatbot.handle_supplier_message("supplier-conversation", post.post_token, "hello")
+
+    record = next(record for record in caplog.records if record.message == "supplier message send failed")
+    assert record.status_code == 502
+    assert str(record.client_id) == str(client.id)
+    assert record.conversation_id == "supplier-conversation"
 
 
 @pytest.mark.asyncio
@@ -526,7 +634,7 @@ async def test_handle_supplier_message_unresolved_logs_warning_and_resets_contex
     assert warning.post_token == "unknown-post"
     assert warning.conversation_id == "unknown-conversation"
     assert not any(
-        record.message == "would send supplier message"
+        record.message == "supplier reply sent"
         for record in caplog.records
     )
 

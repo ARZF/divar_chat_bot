@@ -1,7 +1,9 @@
 # chatbot.py
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -11,6 +13,7 @@ from config import settings
 from db.session import AsyncSessionLocal
 from logging_config import client_id_var, conversation_id_var
 from models.conversation import Conversation
+from models.oauth_token import OAuthToken
 from models.post import Post
 from services.price_lookup import (
     get_price,
@@ -235,7 +238,7 @@ def _extract_product_name(normalized_text: str) -> str:
 async def handle_supplier_message(
     conversation_id: str, post_token: str, text: str
 ) -> None:
-    """Resolve a supplier post chat and log the currently stubbed reply."""
+    """Resolve a supplier post chat and send the seller-authorized reply."""
     client_id_var.set("-")
     conversation_id_var.set(conversation_id)
 
@@ -245,26 +248,87 @@ async def handle_supplier_message(
                 select(Post.client_id).where(Post.post_token == post_token)
             )
         ).scalar_one_or_none()
+        if client_id is None:
+            logger.warning(
+                "NEW_MESSAGE post_token did not resolve to a client",
+                extra={
+                    "post_token": post_token,
+                    "conversation_id": conversation_id,
+                },
+            )
+            return
 
-    if client_id is None:
-        logger.warning(
-            "NEW_MESSAGE post_token did not resolve to a client",
+        client_id_var.set(str(client_id))
+        oauth_token = (
+            await db.execute(
+                select(OAuthToken).where(OAuthToken.client_id == client_id)
+            )
+        ).scalar_one_or_none()
+        if oauth_token is None:
+            logger.warning(
+                "supplier message skipped: OAuth token missing",
+                extra={
+                    "client_id": client_id,
+                    "conversation_id": conversation_id,
+                },
+            )
+            return
+        access_token = oauth_token.divar_access_token
+        refresh_token = oauth_token.divar_refresh_token
+        token_expires_at = oauth_token.token_expires_at
+
+    client_id_var.set(str(client_id))
+
+    if token_expires_at.tzinfo is None:
+        token_expires_at = token_expires_at.replace(tzinfo=timezone.utc)
+    if token_expires_at <= datetime.now(timezone.utc):
+        try:
+            access_token, refresh_token = await divar_service.refresh_access_token(
+                access_token
+            )
+        except httpx.HTTPError:
+            logger.error(
+                "supplier message skipped: OAuth token refresh failed",
+                extra={"client_id": client_id},
+                exc_info=True,
+            )
+            return
+
+        async with AsyncSessionLocal() as db:
+            oauth_token = (
+                await db.execute(
+                    select(OAuthToken).where(OAuthToken.client_id == client_id)
+                )
+            ).scalar_one()
+            oauth_token.divar_access_token = access_token
+            oauth_token.divar_refresh_token = refresh_token
+            oauth_token.token_expires_at = datetime.now(timezone.utc) + timedelta(
+                days=7
+            )
+            await db.commit()
+        # TODO: Re-register the event subscription after refresh per PHASE2.md §2.9's
+        # "Mandatory, recurring" note; refresh scheduling infrastructure is not built.
+
+    try:
+        await divar_service.send_supplier_message(
+            conversation_id, text, access_token
+        )
+    except httpx.HTTPStatusError as exc:
+        logger.error(
+            "supplier message send failed",
             extra={
-                "post_token": post_token,
+                "status_code": exc.response.status_code,
+                "client_id": client_id,
                 "conversation_id": conversation_id,
             },
         )
         return
 
-    client_id_var.set(str(client_id))
-    # TODO: Known stub: retrieve this seller's OAuth access token, then call
-    # send_supplier_message(conversation_id, text, access_token).
     logger.info(
-        "would send supplier message",
+        "supplier reply sent",
         extra={
             "client_id": client_id,
             "conversation_id": conversation_id,
-            "text": text,
             "send_method": "send_supplier_message",
         },
     )
