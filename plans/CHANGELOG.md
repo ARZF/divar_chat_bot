@@ -4,6 +4,28 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-08-16 (`sent_at` type correction)** — Closed the **`sent_at` type mismatch**
+  flagged as a real finding inside `test_realistic_divar_webhook_payload`'s docstring.
+
+  **The finding.** `docs/events/chat.md` documents `ChatMessage.sent_at` as `Timestamp
+  (int64)` — Divar's live payloads send it as a large microsecond integer (e.g.
+  `1729429926140000`). `schemas/webhook.py` had declared `NewChatbotMessageSchema.sent_at`
+  as `datetime` while `ChatMessage.sent_at` stayed `int`, an inconsistency between the two
+  otherwise-identical message shapes (`ReadMe.md` specifies both `new_message` and
+  `new_chatbot_message` carry the same `ChatMessage` type). The existing test had already
+  worked around this by feeding an ISO 8601 string instead of the real integer format,
+  masking rather than fixing the mismatch.
+
+  **The fix.** Both `NewChatbotMessageSchema.sent_at` and `ChatMessage.sent_at` are now
+  `datetime`. Confirmed Pydantic v2 parses **both** representations Divar could plausibly
+  send — the real microsecond integer and an ISO 8601 string — into a valid `datetime`
+  without error, so this is a safe type-widening, not a behavior change on the wire. The two
+  message schemas are now structurally identical again, matching the docs.
+
+  **Deliberately not done.** No source outside `schemas/webhook.py` was audited yet for code
+  that assumes `sent_at` is a raw `int` (e.g. arithmetic, storage, logging). Flag as a
+  follow-up if such a call site turns up — it would now receive a `datetime` object instead.
+
 - **2026-08-16 (refresh-token fix)** — Fixed the **`refresh_access_token()` per-seller
   defect** recorded as open in the entry below, wired the **mandatory event re-registration**
   that was blocked behind it, and closed the concurrency hole the fix exposed.
