@@ -33,7 +33,7 @@ class ChatMessage(BaseModel):
     conversation: ConversationSchema
     sender: SenderSchema
     type: str
-    sent_at: int
+    sent_at: datetime
     text: Optional[str] = None
 
 
