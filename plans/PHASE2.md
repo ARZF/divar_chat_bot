@@ -322,6 +322,8 @@ chat-sending permission, since chat-sending needs no OAuth at all:**
         &client_id={settings.DIVAR_APP_SLUG}
         &redirect_uri={settings.DIVAR_REDIRECT_URI}
         &scope=USER_PHONE USER_ID offline_access
+               CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND
+               CHAT_SUPPLIER_ALL_CONVERSATIONS_READ
         &state={generated_state}
       ```
       `offline_access` causes Divar to also return a `refresh_token` (valid 30 days per the
@@ -330,6 +332,11 @@ chat-sending permission, since chat-sending needs no OAuth at all:**
       replaces the previous, unconfirmed `CHAT_BOT_SEND_MESSAGE` — that name does not appear
       anywhere in `docs/oauth/ReadMe.md`'s scope list and was likely a conflation with the
       chatbot conversation doc's separate (and differently-mechanized) permission language.
+      > **Scope string updated 2026-08-16 (§2.9):** the two `CHAT_SUPPLIER_ALL_CONVERSATIONS_*`
+      > scopes above were added by §2.9's "New OAuth scopes" item. This block previously listed
+      > only `USER_PHONE USER_ID offline_access` and had gone stale against the implementation.
+      > §2.9 owns those two scopes; §2.3 owns the other three. Do not remove either set when
+      > editing this list.
 
 **`GET /oauth/callback`**
 
@@ -703,6 +710,15 @@ async def get_current_client_id(
 > finishing the foundational chatbot work first. See `CHANGELOG.md` (2026-07-2X entries)
 > for the full investigation trail behind this section's design.
 >
+> **STATUS (audited 2026-08-16): substantially implemented, not complete.** The gate
+> (2.1, 2.4, 2.5, 2.6) was satisfied and this section was then built out across commits
+> `1e89184`, `cfcd4c1`, `182d915`, `593453b`, `167658f`. The scope string, webhook branch,
+> `send_supplier_message`, `register_event_subscription`, the post-login registration, and
+> the reply path are all in place and checked off below. **Three items remain open:** the
+> `/oauth/dev/start` scopes, the mandatory re-registration on token refresh, and the
+> `refresh_access_token()` per-seller defect documented at the end of this section — the
+> last of which blocks the second. Do not treat this section as done.
+>
 > **This is NOT a migration.** The existing chatbot (`conversation.type == "BOT"`,
 > `services/divar.py::send_message()`, `api/webhook.py`'s `NEW_CHATBOT_MESSAGE` handling,
 > the `/start`-message resolver in 2.1) stays exactly as-is, untouched, and continues
@@ -727,17 +743,34 @@ async def get_current_client_id(
 
 ### New OAuth scopes (real `/oauth/start` flow — `api/oauth.py`)
 
-- [ ] Add `CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND` and
+- [x] Add `CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND` and
       `CHAT_SUPPLIER_ALL_CONVERSATIONS_READ` to the real `/oauth/start` scope string
       (confirmed both are flat scopes — no `RESOURCE_ID`/`IDENTIFIER` needed, per
       `docs/chat/users_conversations.md` and `docs/events/ReadMe.md`).
 - [ ] Add the same two scopes (`CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND` and
       `CHAT_SUPPLIER_ALL_CONVERSATIONS_READ`) to `/oauth/dev/start` as well, so the
       dev bootstrap tool can be used to manually test this section's endpoints.
+      > **Still open (audited 2026-08-16).** `/oauth/dev/start` still requests only
+      > `USER_PHONE USER_ID offline_access`. Note this item conflicts with the
+      > 2026-07-2X CHANGELOG entry, which recorded the same thing as an *unresolved open
+      > question* rather than a decided task — the conflict is unresolved either way, so
+      > the box stays open. Consequence while open: the dev bootstrap tool cannot mint a
+      > token capable of exercising `send_supplier_message` or `register_event_subscription`.
+
+> **Scope encoding — open question, not yet verified against the live API (2026-08-16).**
+> `api/oauth.py` builds the authorize URL with `urlencode(params)`, which defaults to
+> `quote_plus` and therefore emits space-separated scopes as `+`
+> (`scope=USER_PHONE+USER_ID+...`). `docs/oauth/ReadMe.md` specifies `SCOPE_1 SCOPE_2` or
+> `SCOPE_1%20SCOPE_2` literally, and never shows `+`. This predates §2.9 (it also affects
+> `/oauth/dev/start`) and has not been observed to fail — Divar's OAuth server appears to be
+> Ory (`ory_at_`-prefixed tokens), whose Go query parser decodes `+` as a space, which would
+> make the current form work in practice. Do not "fix" this blind: confirm against the live
+> authorize endpoint first, then switch to `urlencode(params, quote_via=quote)` only if the
+> `+` form is actually rejected.
 
 ### New: `services/divar.py` — `send_supplier_message()` (new function, `send_message()` untouched)
 
-- [ ] Add `send_supplier_message(conversation_id: str, text: str, access_token: str) -> bool`:
+- [x] Add `send_supplier_message(conversation_id: str, text: str, access_token: str) -> bool`:
       - `POST {BASE_URL}/v2/open-platform/conversations/{conversation_id}/messages`
       - Headers: `_oauth_headers(access_token)` (already exists from 2.3 — reuse, don't
         duplicate)
@@ -748,11 +781,14 @@ async def get_current_client_id(
 
 ### Webhook: additive branching, not replacement (`api/webhook.py`, `schemas/webhook.py`)
 
-- [ ] Extend `schemas/webhook.py`'s `EventType` enum to add `NEW_MESSAGE` alongside the
+- [x] Extend `schemas/webhook.py`'s `EventType` enum to add `NEW_MESSAGE` alongside the
       existing `NEW_CHATBOT_MESSAGE` member.
-- [ ] Add a `new_message: Optional[ChatMessage]` field to `WebhookPayload`, alongside the
+- [x] Add a `new_message: Optional[ChatMessage]` field to `WebhookPayload`, alongside the
       existing `new_chatbot_message` field — additive, both fields coexist on the model.
-- [ ] In `api/webhook.py`'s handler, branch explicitly on `payload.type`:
+      > **Naming note:** the model is actually called `WebhookSchema` in
+      > `schemas/webhook.py`, not `WebhookPayload` as written above. The field was added to
+      > the real class; only this spec's name for it was wrong.
+- [x] In `api/webhook.py`'s handler, branch explicitly on `payload.type`:
       ```python
       if payload.type == EventType.NEW_CHATBOT_MESSAGE:
           # existing logic, untouched
@@ -761,11 +797,14 @@ async def get_current_client_id(
           # new logic (see below)
           ...
       ```
-- [ ] For `NEW_MESSAGE` events: ignore (200, no-op) any message where
+      > **Implemented as two sequential `if` blocks that each `return`, not `if`/`elif`.**
+      > Behaviourally identical (both branches are terminal) with a final catch-all
+      > `{"status": "ignored"}` 200 for unrecognised types. Accepted as-is.
+- [x] For `NEW_MESSAGE` events: ignore (200, no-op) any message where
       `sender.side != "BUYER"` — this excludes both the seller's own messages and your
       bot's own sent replies (which Divar echoes back with `sender.side == "SELLER"`,
       confirmed in `docs/events/ReadMe.md`'s own example payload).
-- [ ] For `NEW_MESSAGE` events from a `BUYER`: resolve `client_id` directly via
+- [x] For `NEW_MESSAGE` events from a `BUYER`: resolve `client_id` directly via
       `conversation.post_token` → `posts.client_id` lookup (the existing `posts` table
       from 2.1/2.2 — no new table needed). **No `/start`-message parsing applies here** —
       `post_token` is present on every message of this conversation type, not just a
@@ -776,10 +815,16 @@ async def get_current_client_id(
          bot-initiated conversation to inject into — the buyer is messaging the seller
          directly), and return 200 to Divar immediately (do not trigger a retry for an
          event we have deliberately chosen not to act on).
+       > **Resolution point (2026-08-16):** this closes the second of the two open questions
+       > recorded in the 2026-07-2X CHANGELOG entry. The lookup happens in
+       > `services/chatbot.py::handle_supplier_message` (inside the background task), not in
+       > the webhook handler — so the 200 is returned before resolution is even attempted,
+       > which satisfies the "return 200 immediately" requirement by construction. The
+       > warning is logged with both `post_token` and `conversation_id` as specified.
 
 ### Event subscription registration (new, one-time per seller after login)
 
-- [ ] After a successful `/oauth/callback` login (2.3) that includes the new scopes,
+- [x] After a successful `/oauth/callback` login (2.3) that includes the new scopes,
       register the event subscription:
       ```
       POST https://open-api.divar.ir/v1/open-platform/events/subscriptions
@@ -791,6 +836,12 @@ async def get_current_client_id(
       (no `event_resource_id` → all of that seller's posts, per
       `docs/events/ReadMe.md`; requires the app-level `EVENTS_REGISTER_SUBSCRIPTION`
       permission, already present in this app's Kenar panel permissions.)
+      > **Failure handling (2026-08-16):** a failed registration is logged as a warning with
+      > `client_id` and does **not** fail the login — the seller is still authenticated and
+      > their session issued. There is no automatic retry, so that seller receives no
+      > `NEW_MESSAGE` events until a registration succeeds. Accepted deliberately: failing
+      > the whole login over a subscription error would be worse. Revisit if it proves
+      > common in practice.
 - [ ] **Mandatory, recurring — do not treat as one-time setup:** per
       `docs/events/ReadMe.md`, this subscription is tied to the specific access token
       used to create it. **Every time a seller's OAuth token is refreshed
@@ -799,6 +850,43 @@ async def get_current_client_id(
       error surfaced anywhere. This needs to be wired into whatever code path eventually
       handles per-seller token refresh (not yet built — flag this dependency explicitly
       wherever that refresh-scheduling work happens).
+      > **Still open (audited 2026-08-16).** Now flagged in code by two `TODO`s — one in
+      > `api/oauth.py` after the initial registration, one in
+      > `services/chatbot.py::handle_supplier_message` at the actual refresh call site.
+      > Neither re-registers. The chatbot one is the live gap: that code path *does* refresh
+      > a seller's token today, so it is already capable of silently killing that seller's
+      > event delivery. **Blocked on the `refresh_access_token()` per-seller defect below —
+      > do not wire re-registration until that is resolved,** or re-registration will be
+      > wired onto a refresh call that sends the wrong seller's credentials.
+
+### Open defect found by the 2026-08-16 commit audit — `refresh_access_token()` is not per-seller
+
+> **Not yet fixed. Under investigation — do not implement a fix from this note alone.**
+>
+> `services/divar.py::refresh_access_token(current_access_token)` takes the current access
+> token as a parameter (per 1.B1) but still reads **`settings.DIVAR_REFRESH_TOKEN`** from
+> `.env` for the `refresh_token` field of the request body. Its only per-seller caller,
+> `services/chatbot.py::handle_supplier_message`, then persists whatever pair comes back
+> onto **that seller's** `oauth_tokens` row.
+>
+> So for any seller whose access token has expired, the refresh is attempted with the global
+> bootstrap refresh token rather than that seller's own, and the result is written over that
+> seller's stored credentials. `REFERENCE.md`'s `services/divar.py` notes already called this
+> out in the abstract — "the moment tokens become per-client (Phase 2), this pattern cannot
+> continue" — but the function was left reading the global setting.
+>
+> Commit `167658f` corrected this function's *return* arity (it now returns the real
+> `expires_in` instead of the caller hardcoding 7 days) but did not touch its *input*, which
+> is where this defect lives. The two are easy to conflate; they are separate.
+>
+> Points to settle before changing anything: whether `refresh_access_token` should take an
+> explicit `refresh_token` parameter or the whole `OAuthToken` row; whether
+> `settings.DIVAR_REFRESH_TOKEN` should remain at all once per-seller refresh works (the
+> `/oauth/dev/*` bootstrap tool is its only other consumer); and how this interacts with the
+> ~2-minute old-token grace window and the 2026-08-13 atomic-claim work on app-session
+> refresh tokens. Re-registration of the event subscription (item above) should land in the
+> same pass, since both hang off the same call site.
+
 
 ### Explicitly out of scope for this section
 

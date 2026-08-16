@@ -4,6 +4,80 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-08-16 (§2.9 implementation + commit audit)** — Built out **supplier-wide chat
+  messaging** across five commits (`1e89184`, `cfcd4c1`, `182d915`, `593453b`, `167658f`),
+  then audited those commits against `docs/` and the plan files. §2.9 is now
+  **substantially implemented but not complete** — see its status note for the three
+  remaining items.
+
+  **What landed.** The real `/oauth/start` scope string gained
+  `CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND` and `CHAT_SUPPLIER_ALL_CONVERSATIONS_READ`.
+  `services/divar.py` gained `send_supplier_message()` (v2 endpoint, `message` body field,
+  `_oauth_headers`) and `register_event_subscription()` (`{"event_type":
+  "NEW_MESSAGE_ON_POST"}`, no `event_resource_id`). `schemas/webhook.py` gained the
+  `NEW_MESSAGE` enum member and the `new_message` field; `api/webhook.py` dispatches on
+  `payload.type` and drops non-`BUYER` senders. `services/chatbot.py` gained
+  `handle_supplier_message`, which resolves `post_token → posts.client_id` and sends the
+  seller-authorized reply. `/oauth/callback` registers the subscription after login.
+  Verified against docs: the endpoint, body field, and auth of `send_supplier_message` match
+  `docs/chat/users_conversations.md`; omitting `event_resource_id` to mean "all posts" matches
+  `docs/events/ReadMe.md`.
+
+  **Open question resolved: unresolved `post_token`.** One of the two questions left open in
+  the 2026-07-2X entry is now decided as specified — log a warning with `post_token` and
+  `conversation_id`, send no reply. Because resolution happens inside the background task,
+  the webhook's 200 is already returned before the lookup runs, so no redelivery is
+  triggered. The other question (`/oauth/dev/start` scopes) remains open, and it also
+  contradicts §2.9's own checkbox, which states it as a decided task rather than a question.
+  Left unresolved rather than silently picking a side.
+
+  **Deliberate deviations, recorded so they aren't re-flagged.** `api/webhook.py` uses two
+  sequential terminal `if` blocks rather than the `if`/`elif` shown in §2.9 — behaviourally
+  identical. §2.9 named the payload model `WebhookPayload`; it is actually `WebhookSchema`.
+  A failed post-login subscription registration is logged and swallowed rather than failing
+  the login, with no retry — so an affected seller receives no events until a later
+  registration succeeds.
+
+  **`expires_in` fix (`167658f`).** `refresh_access_token()` now returns the real
+  `expires_in` from the token response as a third tuple element, and
+  `handle_supplier_message` computes `token_expires_at` from it instead of hardcoding 7 days.
+  This aligns with the 2026-07-20 live-test finding that `expires_in` was `604800`, not the
+  documented `3600`, and with §2.3's "never hardcode 3600" note.
+
+  **Open defect found by the audit — `refresh_access_token()` is not per-seller.** The
+  function takes the current access token as a parameter but still reads
+  `settings.DIVAR_REFRESH_TOKEN` from `.env` for the request body, while its only
+  per-seller caller persists the result onto that seller's `oauth_tokens` row. Any seller
+  with an expired access token is therefore refreshed against the global bootstrap token,
+  and the returned pair overwrites their stored credentials. `REFERENCE.md` had already
+  warned this pattern "cannot continue" once tokens went per-client. `167658f` fixed the
+  return arity, not the input — separate concerns. **Not fixed; under investigation.** The
+  mandatory event re-registration on refresh is blocked behind it, since both hang off the
+  same call site. Full write-up and the questions to settle are in PHASE2.md §2.9.
+
+  **Open question — scope encoding.** `urlencode(params)` defaults to `quote_plus`, so the
+  authorize URL emits `scope=USER_PHONE+USER_ID+...` while `docs/oauth/ReadMe.md` specifies
+  space or `%20` and never shows `+`. Predates §2.9 (also affects `/oauth/dev/start`) and has
+  never been observed to fail — Divar's OAuth server appears to be Ory, whose Go query parser
+  decodes `+` as a space. Flagged, not changed: verify against the live authorize endpoint
+  before touching it.
+
+  **Also updated.** `EVENTS_REGISTER_SUBSCRIPTION` added to the Pre-Production API-key
+  permission table, and the two new scopes added to the OAuth scope-approval item, with a
+  note that they are materially broader than the login scopes and will be reviewed
+  separately. Corrected there too: `docs/scopes/README.md` is a rate-limit/quota doc despite
+  its name, and no complete scope registry exists in the docs —
+  `CHAT_SUPPLIER_ALL_CONVERSATIONS_READ` is documented only in `docs/events/ReadMe.md`'s
+  event table, and `..._MESSAGE_SEND` only in `docs/chat/users_conversations.md`. Both are
+  confirmed flat scopes with no `IDENTIFIER`.
+
+  **Test evidence.** None gathered this pass: the test suite could not run in this
+  environment — `python -m pytest` fails at collection for all six test modules with
+  `ModuleNotFoundError: No module named 'httpx'` (dependencies are not installed here). The
+  commits under audit do add tests (`tests/test_divar_service.py`,
+  `tests/test_chatbot.py`, `tests/test_webhook.py`, `tests/test_oauth.py`), but their passing
+  status is unverified by this audit and should be re-confirmed in a working environment.
+
 - **2026-08-16** — Closed the **models → services inverted-layering item** left open in
   the 2026-08-11 §2.6 entry, and verified that the enum move produces no schema drift.
 

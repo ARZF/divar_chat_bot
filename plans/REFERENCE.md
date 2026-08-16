@@ -64,6 +64,13 @@ import ...` not `from app.services.divar import ...`).
   per-client (Phase 2), this pattern cannot continue — there is no single global token to
   mutate. This rework is itself a Phase 2 task (see "2.3 Divar Service — Per-Client Tokens"
   below); do not attempt it during Phase 1.
+  > **Status 2026-08-16: partly done, and the leftover is now an active defect.**
+  > `send_message`/`get_conversation` were converted to `X-Api-Key`-only per 2.3, and no
+  > caller mutates `settings.DIVAR_ACCESS_TOKEN` any more. But `refresh_access_token` still
+  > reads `settings.DIVAR_REFRESH_TOKEN`, and §2.9 gave it a genuinely per-seller caller
+  > (`handle_supplier_message`) that writes the result to a specific seller's row — which is
+  > exactly the situation this note predicted "cannot continue." Under investigation; see
+  > PHASE2.md §2.9's open-defect note before changing this function.
 
 ### `services/chatbot.py` — EXISTS
 - Contains `handle_bot_reply(conversation_id, user_text)` — main orchestrator.

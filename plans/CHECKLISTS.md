@@ -39,11 +39,21 @@
       | Permission | Used By | Notes |
       |---|---|---|
       | `CHAT_BOT_SEND_MESSAGE` | `send_message()` — POST .../conversations/{id}/messages | Required per `docs/chat/chatbot_conversations.md` |
+      | `EVENTS_REGISTER_SUBSCRIPTION` | `register_event_subscription()` — POST /events/subscriptions | API-key permission, **not** an OAuth scope, per `docs/events/ReadMe.md`. Confirmed present in this app's test-app panel; re-confirm on the production key |
       | `GET_POST` | Future: post info retrieval | Only if/when post lookup is implemented |
 
 - [ ] **OAuth scope approval (Divar ticketing):** Submit ticket to approve for production:
-      `USER_PHONE`, `USER_ID`, `offline_access`. Test apps get all scopes by default;
-      production apps get none until individually approved per `docs/scopes/README.md`.
+      `USER_PHONE`, `USER_ID`, `offline_access`,
+      `CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND`, `CHAT_SUPPLIER_ALL_CONVERSATIONS_READ`.
+      Test apps get all scopes by default; production apps get none until individually
+      approved. (Note: `docs/scopes/README.md` is a rate-limit/quota doc despite its name —
+      the test-vs-production scope rule is in its final section. There is no complete scope
+      registry in the docs; `docs/oauth/ReadMe.md`'s table lists only three examples.)
+      > **Added 2026-08-16 (§2.9):** the two `CHAT_SUPPLIER_ALL_CONVERSATIONS_*` scopes are
+      > materially broader than the first three — they cover reading and sending on *every*
+      > chat of *every* post a seller owns. §2.9 already warns to expect scrutiny here.
+      > Budget for a real justification in the ticket, and expect these two to be reviewed
+      > separately from the login scopes.
 
 - [ ] **Rate limits:** Review daily quota and minutely rate limit for the production app
       in Kenar panel. Request increase via ticket if expected volume exceeds defaults.
