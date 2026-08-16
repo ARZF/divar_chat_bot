@@ -62,3 +62,102 @@ If the project is not yet indexed, call `index_repository` with `repo_path` and 
 
 - Applies to all code-search, code-reading, symbol-discovery, call-tracing, and architecture-understanding tasks.
 - Does **not** apply to executing build/test/lint commands or modifying files — those should use the standard tools.
+
+## Git Commit Messages
+
+- **All Git commit messages MUST follow the Conventional Commits specification.**
+- Every commit message MUST use this format:
+
+  `<type>(<scope>): <description>`
+
+- Allowed commit types:
+  - `feat` — a new feature
+  - `fix` — a bug fix
+  - `refactor` — code restructuring without changing behavior
+  - `test` — adding or modifying tests
+  - `docs` — documentation-only changes
+  - `chore` — maintenance tasks that do not affect application behavior
+  - `build` — dependency or build-system changes
+  - `ci` — CI/CD changes
+  - `perf` — performance improvements
+  - `style` — formatting/style-only changes
+
+- Use a **meaningful and specific scope** whenever applicable, based on the affected module or domain.
+
+- Examples of valid scopes:
+  - `auth`
+  - `oauth`
+  - `chatbot`
+  - `webhook`
+  - `divar`
+  - `db`
+  - `plans`
+  - `git`
+
+- The commit description MUST:
+  - Be concise and specific.
+  - Use imperative/command-style wording.
+  - Start with a lowercase letter.
+  - NOT end with a period.
+
+- **NEVER create commits with a plain sentence without a Conventional Commit type.**
+
+- Invalid examples:
+  - `Fix refresh token handling`
+  - `Add event subscription`
+  - `Wire supplier message handler`
+  - `Document ConversationState move`
+
+- Valid examples:
+  - `fix(oauth): return real expires_in from refresh_access_token`
+  - `feat(webhook): add event subscription handling`
+  - `feat(chatbot): add supplier message handling`
+  - `docs(plans): document ConversationState move`
+
+- **NEVER omit the commit type**, even for small changes.
+
+- If a change belongs to multiple independent concerns, **prefer separate commits** rather than combining unrelated changes into one commit.
+
+- Do NOT use broad or meaningless scopes such as:
+  - `misc`
+  - `stuff`
+  - `changes`
+  - `general`
+
+- Before creating a commit, inspect the staged changes and determine the correct `type` and `scope` from the actual changes.
+
+- **Do not guess the commit type from the previous commit.**
+
+- If the staged changes contain multiple unrelated logical changes, split them into separate commits whenever possible.
+
+- Do not combine unrelated fixes, features, documentation changes, dependency changes, or refactors into a single commit merely for convenience.
+
+- Existing commit history should be treated as the project's style reference. Preserve consistency with the established Conventional Commit format.
+
+### Commit Type Guidelines
+
+- Use `feat` when introducing new user-visible or application functionality.
+- Use `fix` when correcting incorrect or broken behavior.
+- Use `refactor` when restructuring code without changing its intended behavior.
+- Use `test` when adding, modifying, or improving tests.
+- Use `docs` when changing documentation only.
+- Use `chore` for maintenance work that does not change application behavior.
+- Use `build` for dependencies, packaging, or build-system changes.
+- Use `ci` for CI/CD configuration or workflow changes.
+- Use `perf` for performance improvements.
+- Use `style` for formatting or style-only changes.
+
+### Examples
+
+```text
+feat(chatbot): add supplier message handling
+fix(oauth): return real expires_in from refresh_access_token
+fix(auth): atomically claim refresh tokens
+fix(db): enforce global uniqueness on conversations
+refactor(state): move ConversationState to models.enums
+test(auth): cover concurrent token insertion
+test(chatbot): cover webhook redelivery handling
+docs(plans): document seller authentication status
+build: add respx dependency
+chore(git): stop tracking codebase memory artifacts
+ci: update GitHub Actions workflow
