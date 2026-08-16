@@ -10,6 +10,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import dialect as postgresql_dialect
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
@@ -560,8 +561,12 @@ async def test_handle_supplier_message_refreshes_expired_token_before_sending(
     monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
     refresh = AsyncMock(return_value=("new-access", "new-refresh", 37))
     send_supplier_message = AsyncMock()
+    register_event_subscription = AsyncMock()
     monkeypatch.setattr(chatbot.divar_service, "refresh_access_token", refresh)
     monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", send_supplier_message)
+    monkeypatch.setattr(
+        chatbot.divar_service, "register_event_subscription", register_event_subscription
+    )
 
     before_refresh = datetime.now(timezone.utc)
     await chatbot.handle_supplier_message(
@@ -569,7 +574,12 @@ async def test_handle_supplier_message_refreshes_expired_token_before_sending(
     )
     after_refresh = datetime.now(timezone.utc)
 
-    refresh.assert_awaited_once_with("old-access")
+    # Both arguments must be this seller's own stored credentials — passing the global
+    # settings.DIVAR_REFRESH_TOKEN here was the bug.
+    refresh.assert_awaited_once_with("old-access", "old-refresh")
+    # A subscription is bound to the token that created it, so a refresh must
+    # re-register it with the new token or this seller stops receiving events.
+    register_event_subscription.assert_awaited_once_with("new-access")
     send_supplier_message.assert_awaited_once_with(
         "supplier-conversation", "hello", "new-access"
     )
@@ -619,6 +629,119 @@ async def test_handle_supplier_message_send_http_error_is_logged_and_suppressed(
     assert record.status_code == 502
     assert str(record.client_id) == str(client.id)
     assert record.conversation_id == "supplier-conversation"
+
+
+@pytest.mark.asyncio
+async def test_handle_supplier_message_still_sends_when_resubscription_fails(
+    monkeypatch, session_factory, seeded_post, caplog
+):
+    """A failed re-registration must not block the reply the refresh was performed for."""
+    client, post = seeded_post
+    async with session_factory() as seed_db:
+        seed_db.add(
+            OAuthToken(
+                client_id=client.id,
+                divar_access_token="old-access",
+                divar_refresh_token="old-refresh",
+                token_expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+            )
+        )
+        await seed_db.commit()
+
+    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    send_supplier_message = AsyncMock()
+    monkeypatch.setattr(
+        chatbot.divar_service,
+        "refresh_access_token",
+        AsyncMock(return_value=("new-access", "new-refresh", 37)),
+    )
+    monkeypatch.setattr(
+        chatbot.divar_service,
+        "register_event_subscription",
+        AsyncMock(side_effect=httpx.ConnectError("boom")),
+    )
+    monkeypatch.setattr(
+        chatbot.divar_service, "send_supplier_message", send_supplier_message
+    )
+
+    with caplog.at_level(logging.WARNING, logger="chatbot"):
+        await chatbot.handle_supplier_message(
+            "supplier-conversation", post.post_token, "hello"
+        )
+
+    send_supplier_message.assert_awaited_once_with(
+        "supplier-conversation", "hello", "new-access"
+    )
+    warning = next(
+        record
+        for record in caplog.records
+        if record.message
+        == "event subscription re-registration failed after token refresh"
+    )
+    assert str(warning.client_id) == str(client.id)
+
+
+def test_supplier_token_refresh_locks_the_row_on_postgres():
+    """The refresh read must be `SELECT ... FOR UPDATE` so concurrent tasks serialize.
+
+    Asserted at the dialect level on purpose: the test suite runs on SQLite, which
+    silently *drops* `FOR UPDATE` from the compiled statement, so no SQLite-based test
+    can observe the lock actually working. Production is PostgreSQL
+    (`postgresql+asyncpg`), where the clause is emitted and enforced. This pins the
+    clause's presence, which is what would regress if someone removed
+    `.with_for_update()`.
+    """
+    source = inspect.getsource(chatbot._refresh_supplier_token)
+    assert ".with_for_update()" in source
+
+    statement = (
+        select(OAuthToken).where(OAuthToken.client_id == 1).with_for_update()
+    )
+    compiled = str(statement.compile(dialect=postgresql_dialect()))
+    assert compiled.rstrip().endswith("FOR UPDATE")
+
+
+@pytest.mark.asyncio
+async def test_supplier_token_refresh_reuses_token_refreshed_by_concurrent_task(
+    monkeypatch, session_factory, seeded_post
+):
+    """The re-check under the lock must prevent a second, redundant refresh.
+
+    Divar rotates the refresh token on every call and invalidates the old one, so two
+    tasks each refreshing the same seller would leave whichever pair lost the write
+    unusable — that seller could then never refresh again. A task that waited on the lock
+    must therefore observe the winner's fresh token and reuse it.
+
+    This simulates the woken-up loser directly: the row is already unexpired by the time
+    `_refresh_supplier_token` acquires it. Driving two real tasks concurrently cannot
+    demonstrate this on SQLite (see the dialect note above).
+    """
+    client, post = seeded_post
+    async with session_factory() as seed_db:
+        seed_db.add(
+            OAuthToken(
+                client_id=client.id,
+                divar_access_token="winner-access",
+                divar_refresh_token="winner-refresh",
+                token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+        )
+        await seed_db.commit()
+
+    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    refresh = AsyncMock()
+    register_event_subscription = AsyncMock()
+    monkeypatch.setattr(chatbot.divar_service, "refresh_access_token", refresh)
+    monkeypatch.setattr(
+        chatbot.divar_service, "register_event_subscription", register_event_subscription
+    )
+
+    access_token = await chatbot._refresh_supplier_token(client.id)
+
+    assert access_token == "winner-access"
+    refresh.assert_not_awaited()
+    # The winner already re-registered; doing it again would be a redundant API call.
+    register_event_subscription.assert_not_awaited()
 
 
 @pytest.mark.asyncio

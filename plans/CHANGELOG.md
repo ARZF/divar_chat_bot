@@ -4,6 +4,67 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-08-16 (refresh-token fix)** — Fixed the **`refresh_access_token()` per-seller
+  defect** recorded as open in the entry below, wired the **mandatory event re-registration**
+  that was blocked behind it, and closed the concurrency hole the fix exposed.
+
+  **The defect.** `refresh_access_token()` read `settings.DIVAR_REFRESH_TOKEN` from `.env`
+  while its only caller, `handle_supplier_message`, persisted the returned pair onto a
+  specific seller's `oauth_tokens` row. Every per-seller refresh was therefore attempted with
+  the global bootstrap credential, and its result overwrote that seller's stored tokens.
+
+  **The fix.** The signature is now
+  `refresh_access_token(current_access_token, refresh_token)` — no `settings` read remains in
+  the function, and the docstring states that both arguments must belong to the same seller,
+  since Divar rotates the refresh token on every call. The refresh/persist logic moved out of
+  `handle_supplier_message` into `services/chatbot.py::_refresh_supplier_token(client_id)
+  -> Optional[str]`, returning `None` to mean "refresh failed, send nothing." The caller
+  shrank to a four-line call, so the expired-token branch now has one owner.
+
+  **Concurrency, fixed in the same pass rather than deferred.** Two buyer messages arriving
+  together for a seller with an expired token spawn two background tasks. Because Divar
+  rotates *and invalidates* the refresh token on every call, both refreshing would leave
+  whichever pair lost the write permanently unusable — that seller could never refresh again,
+  with nothing surfaced anywhere. `_refresh_supplier_token` claims the row with
+  `SELECT ... FOR UPDATE` and **re-checks the expiry under the lock**, so a task that waited
+  reuses the winner's token rather than burning a second rotation. Same philosophy as the
+  2026-08-13 `delete(...).returning(...)` claim on app-session refresh tokens: make the race
+  impossible in SQL instead of defending against it afterwards.
+
+  **Event re-registration.** `_refresh_supplier_token` calls
+  `register_event_subscription(new_access_token)` after committing, outside the lock. Failure
+  is logged as a warning and swallowed — the buyer's reply still goes out. This closes §2.9's
+  last "mandatory, recurring" item **for the one refresh path that exists**; a future refresh
+  *scheduler* must call it too, since the obligation is per-refresh, not per-code-path. The
+  two stale `TODO`s (one in `api/oauth.py`, one in `chatbot.py`) are gone.
+
+  **Test evidence — 163 passed** (from 159 passing + 2 failing before this pass; the venv
+  needed for a runnable suite is created under `.venv/`, which is gitignored). Each change
+  was verified to actually be covered by deliberately reverting it: restoring the
+  `settings.DIVAR_REFRESH_TOKEN` read fails both `refresh_access_token` tests, and disabling
+  the re-registration call fails both supplier-refresh tests. New/updated tests assert the
+  seller's own refresh token reaches the request body, that it differs from the global
+  setting, that re-registration happens with the new token, and that a failed
+  re-registration does not block the reply.
+
+  **Known testing limitation — do not read the concurrency coverage as proof.** The suite
+  runs on SQLite, which **silently drops `FOR UPDATE`** from the compiled statement (verified
+  by compiling the same `select()` against both dialects: absent on SQLite, present on
+  PostgreSQL). A two-task `asyncio.gather` test was written, observed to fail with
+  `refresh.await_count == 2`, and then **deliberately removed** rather than weakened into
+  something that passed for the wrong reason — on SQLite it could never demonstrate
+  serialization. What replaced it: a dialect-level test pinning that the statement compiles to
+  `... FOR UPDATE` on PostgreSQL and that `.with_for_update()` remains in the source, plus a
+  test driving the woken-up-loser branch directly. **The lock's real behaviour under
+  PostgreSQL remains unverified** — worth an integration check when a live DB is available.
+
+  **Deliberately not done.** `settings.DIVAR_ACCESS_TOKEN` and `settings.DIVAR_REFRESH_TOKEN`
+  are now read by no source code at all. Removing them touches every deployment's `.env`,
+  `.env.example`, `conftest.py`, and five test modules — not appropriate inside a bug-fix
+  commit, so it is logged in `CHECKLISTS.md` under Config Cleanup beside the existing
+  `admin_token` item. The `/oauth/dev/*` bootstrap routes only *print* tokens for manual
+  `.env` pasting and never read these settings, so that cleanup will not break the tool.
+
 - **2026-08-16 (§2.9 implementation + commit audit)** — Built out **supplier-wide chat
   messaging** across five commits (`1e89184`, `cfcd4c1`, `182d915`, `593453b`, `167658f`),
   then audited those commits against `docs/` and the plan files. §2.9 is now
@@ -54,6 +115,7 @@
   return arity, not the input — separate concerns. **Not fixed; under investigation.** The
   mandatory event re-registration on refresh is blocked behind it, since both hang off the
   same call site. Full write-up and the questions to settle are in PHASE2.md §2.9.
+  > **Superseded — fixed later the same day; see the refresh-token-fix entry above.**
 
   **Open question — scope encoding.** `urlencode(params)` defaults to `quote_plus`, so the
   authorize URL emits `scope=USER_PHONE+USER_ID+...` while `docs/oauth/ReadMe.md` specifies
@@ -71,12 +133,12 @@
   event table, and `..._MESSAGE_SEND` only in `docs/chat/users_conversations.md`. Both are
   confirmed flat scopes with no `IDENTIFIER`.
 
-  **Test evidence.** None gathered this pass: the test suite could not run in this
-  environment — `python -m pytest` fails at collection for all six test modules with
-  `ModuleNotFoundError: No module named 'httpx'` (dependencies are not installed here). The
-  commits under audit do add tests (`tests/test_divar_service.py`,
-  `tests/test_chatbot.py`, `tests/test_webhook.py`, `tests/test_oauth.py`), but their passing
-  status is unverified by this audit and should be re-confirmed in a working environment.
+  **Test evidence.** None gathered during the audit itself: `python -m pytest` failed at
+  collection for all six test modules with `ModuleNotFoundError: No module named 'httpx'`
+  (dependencies were not installed in that environment). **Resolved in the refresh-token-fix
+  pass above**, which created a local `.venv` and ran the suite — the baseline for these five
+  commits was **159 passing, 2 failing**, both failures being tests that pinned the old
+  `refresh_access_token` signature.
 
 - **2026-08-16** — Closed the **models → services inverted-layering item** left open in
   the 2026-08-11 §2.6 entry, and verified that the enum move produces no schema drift.

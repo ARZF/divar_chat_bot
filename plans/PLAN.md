@@ -42,9 +42,11 @@ the split is to avoid reading the *entire* history for every task, not to hide i
 > Build order: ~~2.2~~ → 2.8 partial (OTP/SMS deferred; see `CHECKLISTS.md`) → ~~2.7~~ → ~~2.3~~ → (~~2.1~~ ∥ ~~2.4~~ ∥ ~~2.6~~) → ~~2.5~~ → 2.9 partial → 2.7 admin rework)
 >
 > **For this phase, read `PHASE2.md`** — the `## 2.7` admin rework is next per build order.
-> §2.9 was built out on 2026-08-16 and is **substantially implemented but not complete**:
-> three items remain open there, including a `refresh_access_token()` per-seller defect that
-> blocks the mandatory event re-registration. Read §2.9's status note before touching either.
+> §2.9 was built out on 2026-08-16 and is **substantially implemented but not complete**: the
+> `/oauth/dev/start` scopes remain open. The `refresh_access_token()` per-seller defect found
+> while auditing those commits is fixed, together with event re-registration on refresh; the
+> row lock added there is **unverified against PostgreSQL** (SQLite drops `FOR UPDATE`) — read
+> §2.9's resolved-defect note before touching that path.
 > `PHASE2.md`'s own intro references `REFERENCE.md` and `PHASE1.md` where
 > relevant — follow those pointers as needed, don't read them preemptively in full.
 

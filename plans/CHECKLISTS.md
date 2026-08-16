@@ -166,5 +166,15 @@ and didn't need to wait.
       Only the `config.py` field definition, doc prose, and the tests' `os.environ`
       setup (which merely satisfies the required Settings field) still mention it. Drop
       the field and update the test env-var setup in the same cleanup pass.
+- [ ] Remove the now-dead `DIVAR_ACCESS_TOKEN` and `DIVAR_REFRESH_TOKEN` fields from
+      `Settings` (`config.py`), `.env.example`, and the `os.environ.setdefault` blocks in
+      `conftest.py` and the test modules. As of the 2026-08-16 refresh-token fix, no source
+      code reads either one — per-seller tokens live in `oauth_tokens`, and
+      `refresh_access_token` now receives the refresh token as a parameter. Deliberately
+      **not** done in that bug-fix commit: it changes every deployment's `.env` and six test
+      modules, which is a separate concern from the fix. Note the `/oauth/dev/*` bootstrap
+      routes still *print* tokens for manual `.env` pasting but never read these settings, so
+      dropping them does not break that tool. Best done together with the `admin_token`
+      cleanup above, since both touch the same test env-var setup.
 ---
 

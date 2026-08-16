@@ -710,14 +710,15 @@ async def get_current_client_id(
 > finishing the foundational chatbot work first. See `CHANGELOG.md` (2026-07-2X entries)
 > for the full investigation trail behind this section's design.
 >
-> **STATUS (audited 2026-08-16): substantially implemented, not complete.** The gate
+> **STATUS (audited 2026-08-16): substantially implemented, one item left.** The gate
 > (2.1, 2.4, 2.5, 2.6) was satisfied and this section was then built out across commits
-> `1e89184`, `cfcd4c1`, `182d915`, `593453b`, `167658f`. The scope string, webhook branch,
-> `send_supplier_message`, `register_event_subscription`, the post-login registration, and
-> the reply path are all in place and checked off below. **Three items remain open:** the
-> `/oauth/dev/start` scopes, the mandatory re-registration on token refresh, and the
-> `refresh_access_token()` per-seller defect documented at the end of this section — the
-> last of which blocks the second. Do not treat this section as done.
+> `1e89184`, `cfcd4c1`, `182d915`, `593453b`, `167658f`, plus the refresh-token fix that
+> followed the audit of those commits. The scope string, webhook branch,
+> `send_supplier_message`, `register_event_subscription`, the post-login registration, the
+> reply path, and re-registration on refresh are all in place. **One item remains open:** the
+> `/oauth/dev/start` scopes. The `refresh_access_token()` per-seller defect found by the audit
+> is fixed — see the resolved-defect note at the end of this section, including the SQLite
+> testing limitation on the row lock.
 >
 > **This is NOT a migration.** The existing chatbot (`conversation.type == "BOT"`,
 > `services/divar.py::send_message()`, `api/webhook.py`'s `NEW_CHATBOT_MESSAGE` handling,
@@ -842,7 +843,7 @@ async def get_current_client_id(
       > `NEW_MESSAGE` events until a registration succeeds. Accepted deliberately: failing
       > the whole login over a subscription error would be worse. Revisit if it proves
       > common in practice.
-- [ ] **Mandatory, recurring — do not treat as one-time setup:** per
+- [x] **Mandatory, recurring — do not treat as one-time setup:** per
       `docs/events/ReadMe.md`, this subscription is tied to the specific access token
       used to create it. **Every time a seller's OAuth token is refreshed
       (`refresh_access_token()`), the subscription must be re-registered with the new
@@ -850,42 +851,61 @@ async def get_current_client_id(
       error surfaced anywhere. This needs to be wired into whatever code path eventually
       handles per-seller token refresh (not yet built — flag this dependency explicitly
       wherever that refresh-scheduling work happens).
-      > **Still open (audited 2026-08-16).** Now flagged in code by two `TODO`s — one in
-      > `api/oauth.py` after the initial registration, one in
-      > `services/chatbot.py::handle_supplier_message` at the actual refresh call site.
-      > Neither re-registers. The chatbot one is the live gap: that code path *does* refresh
-      > a seller's token today, so it is already capable of silently killing that seller's
-      > event delivery. **Blocked on the `refresh_access_token()` per-seller defect below —
-      > do not wire re-registration until that is resolved,** or re-registration will be
-      > wired onto a refresh call that sends the wrong seller's credentials.
+      > **Done 2026-08-16, for the one refresh path that exists.**
+      > `services/chatbot.py::_refresh_supplier_token` re-registers with the new access
+      > token immediately after persisting it. Failure is logged as a warning and
+      > swallowed — the reply the refresh was performed for still goes out; the
+      > alternative (dropping the buyer's message over a subscription error) is worse.
+      > **This is not blanket coverage:** it only fires on the reply-path refresh. If a
+      > background refresh *scheduler* is ever added, it must call
+      > `register_event_subscription` too — the obligation is per-refresh, not
+      > per-code-path.
 
-### Open defect found by the 2026-08-16 commit audit — `refresh_access_token()` is not per-seller
+### Resolved 2026-08-16 — `refresh_access_token()` was not per-seller
 
-> **Not yet fixed. Under investigation — do not implement a fix from this note alone.**
+> **Fixed.** Kept as a record of the defect, since the shape of it is easy to reintroduce.
 >
-> `services/divar.py::refresh_access_token(current_access_token)` takes the current access
-> token as a parameter (per 1.B1) but still reads **`settings.DIVAR_REFRESH_TOKEN`** from
-> `.env` for the `refresh_token` field of the request body. Its only per-seller caller,
-> `services/chatbot.py::handle_supplier_message`, then persists whatever pair comes back
-> onto **that seller's** `oauth_tokens` row.
+> `refresh_access_token()` took the current access token as a parameter (per 1.B1) but read
+> **`settings.DIVAR_REFRESH_TOKEN`** from `.env` for the `refresh_token` field of the request
+> body. Its only per-seller caller then persisted whatever came back onto **that seller's**
+> `oauth_tokens` row. So any seller with an expired access token was refreshed against the
+> global bootstrap credential, and the result overwrote their stored tokens. Commit `167658f`
+> had corrected this function's *return* arity without touching its *input*, which is where
+> the defect lived.
 >
-> So for any seller whose access token has expired, the refresh is attempted with the global
-> bootstrap refresh token rather than that seller's own, and the result is written over that
-> seller's stored credentials. `REFERENCE.md`'s `services/divar.py` notes already called this
-> out in the abstract — "the moment tokens become per-client (Phase 2), this pattern cannot
-> continue" — but the function was left reading the global setting.
+> **The fix.** `refresh_access_token(current_access_token, refresh_token)` now takes the
+> refresh token explicitly — no `settings` read remains in it. Both arguments must belong to
+> the same seller, which the docstring states, because Divar rotates the refresh token on
+> every call. The refresh/persist logic moved out of `handle_supplier_message` into
+> `services/chatbot.py::_refresh_supplier_token(client_id) -> Optional[str]`, which returns
+> `None` on failure to mean "send nothing."
 >
-> Commit `167658f` corrected this function's *return* arity (it now returns the real
-> `expires_in` instead of the caller hardcoding 7 days) but did not touch its *input*, which
-> is where this defect lives. The two are easy to conflate; they are separate.
+> **Concurrency, handled in the same pass.** Two buyer messages arriving together for a
+> seller with an expired token spawn two background tasks. Since Divar rotates and
+> invalidates the refresh token on every call, both refreshing would leave whichever pair
+> lost the write unusable — that seller could then never refresh again, with no error
+> surfaced. `_refresh_supplier_token` therefore claims the row with `SELECT ... FOR UPDATE`
+> and **re-checks the expiry under the lock**, so a task that waited reuses the winner's
+> token instead of refreshing again. This follows the `delete(...).returning(...)`
+> atomic-claim precedent from the 2026-08-13 app-session refresh work: make the race
+> impossible in SQL rather than defending against it afterwards.
 >
-> Points to settle before changing anything: whether `refresh_access_token` should take an
-> explicit `refresh_token` parameter or the whole `OAuthToken` row; whether
-> `settings.DIVAR_REFRESH_TOKEN` should remain at all once per-seller refresh works (the
-> `/oauth/dev/*` bootstrap tool is its only other consumer); and how this interacts with the
-> ~2-minute old-token grace window and the 2026-08-13 atomic-claim work on app-session
-> refresh tokens. Re-registration of the event subscription (item above) should land in the
-> same pass, since both hang off the same call site.
+> **Testing limit — read before trusting the tests here.** The suite runs on SQLite, which
+> **silently drops `FOR UPDATE`** from the compiled statement (verified: the clause is absent
+> from the SQLite compilation and present in the PostgreSQL one). So no test in this suite
+> can observe the lock actually serializing anything, and a two-task `asyncio.gather` test
+> was deliberately **removed** rather than left passing for the wrong reason — it would have
+> asserted nothing about production. Coverage is instead: a dialect-level test pinning that
+> the statement compiles to `... FOR UPDATE` on PostgreSQL and that
+> `.with_for_update()` is still in the source, plus a test driving the woken-up-loser branch
+> directly. **The lock's real behaviour remains unverified against PostgreSQL** — worth an
+> integration check whenever a live DB is available.
+>
+> **Left alone deliberately.** `settings.DIVAR_ACCESS_TOKEN` and
+> `settings.DIVAR_REFRESH_TOKEN` are now unused by all source code (only a test and
+> `.env.example` mention them). They were **not** removed — that touches every deployment's
+> `.env` plus six test modules, which does not belong in a bug-fix commit. Logged in
+> `CHECKLISTS.md` under Config Cleanup next to the existing `admin_token` item.
 
 
 ### Explicitly out of scope for this section

@@ -191,8 +191,6 @@ async def oauth_callback(
             extra={"client_id": client.id},
             exc_info=True,
         )
-    # TODO: Re-register after every token refresh per PHASE2.md §2.9; token-refresh
-    # scheduling infrastructure does not exist yet.
 
     session = await issue_session(db, client, response)
     # TEMPORARY: return the same JSON contract as OTP login because no seller

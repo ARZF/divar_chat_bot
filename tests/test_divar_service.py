@@ -361,16 +361,45 @@ async def test_refresh_access_token_correct_post_fix_behavior(httpx_mock):
         },
     )
 
-    result = await divar.refresh_access_token(settings.DIVAR_ACCESS_TOKEN)
+    result = await divar.refresh_access_token(
+        "caller_access_token", "caller_refresh_token"
+    )
 
     assert result == ("new_access_token", "new_refresh_token", 1234)
     assert route.called
     request = route.calls[0].request
     body = parse_qs(request.content.decode())
 
-    assert body["code"] == ["test_access_token"]
+    assert body["code"] == ["caller_access_token"]
     assert body["redirect_uri"] == ["https://example.com/callback"]
     assert body["client_id"] == ["test_app_slug"]
     assert body["client_secret"] == ["test_client_secret"]
     assert body["grant_type"] == ["refresh_token"]
-    assert body["refresh_token"] == ["test_refresh_token"]
+    assert body["refresh_token"] == ["caller_refresh_token"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_access_token_uses_callers_refresh_token_not_global_setting(
+    httpx_mock,
+):
+    """Regression: the refresh token must come from the caller, never from `.env`.
+
+    Tokens are per-seller (§2.9). Reading `settings.DIVAR_REFRESH_TOKEN` here meant any
+    seller's refresh was attempted with the global bootstrap credential, and the result
+    was then persisted onto that seller's row.
+    """
+    route = httpx_mock.post(TOKEN_URL).respond(
+        200,
+        json={
+            "access_token": "seller_new_access",
+            "refresh_token": "seller_new_refresh",
+            "expires_in": 3600,
+        },
+    )
+
+    await divar.refresh_access_token("seller_access", "seller_refresh")
+
+    body = parse_qs(route.calls[0].request.content.decode())
+    assert body["refresh_token"] == ["seller_refresh"]
+    assert body["refresh_token"] != [settings.DIVAR_REFRESH_TOKEN]
+

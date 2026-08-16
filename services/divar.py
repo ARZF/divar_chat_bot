@@ -81,7 +81,15 @@ async def get_user_phone_number(access_token: str) -> str | None:
 
 async def refresh_access_token(
     current_access_token: str,
+    refresh_token: str,
 ) -> tuple[str, str, int]:
+    """Exchange a seller's refresh token for a fresh access/refresh token pair.
+
+    Both tokens must belong to the same seller: Divar rotates the refresh token on
+    every call, so passing a refresh token that does not match the caller's stored
+    credentials would overwrite that seller's row with another identity's tokens.
+    ``code`` carries the current access token per ``docs/oauth/ReadMe.md`` step 5.
+    """
     response = await client.post(
         "https://oauth.divar.ir/oauth2/token",
         data={
@@ -90,7 +98,7 @@ async def refresh_access_token(
             "client_secret": settings.DIVAR_CLIENT_SECRET,
             "grant_type": "refresh_token",
             "redirect_uri": settings.DIVAR_REDIRECT_URI,
-            "refresh_token": settings.DIVAR_REFRESH_TOKEN,
+            "refresh_token": refresh_token,
         }
     )
     response.raise_for_status()
