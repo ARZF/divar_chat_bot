@@ -232,20 +232,35 @@ async def test_get_conversation_401_logs_api_key_error(httpx_mock, caplog):
 
 
 # ---------------------------------------------------------------------------
-# send_supplier_message logging
+# send_supplier_message — logging and retry on transient failures
 # ---------------------------------------------------------------------------
+
+SUPPLIER_MSG_URL = (
+    f"{divar.BASE_URL}/v2/open-platform/conversations/conv_123/messages"
+)
+
+
+@pytest.fixture
+def no_sleep(mocker):
+    """Retry backoff must never actually sleep in tests."""
+    return mocker.patch("asyncio.sleep", new_callable=AsyncMock)
+
+
+# NOTE: `record.conversation_id` is not asserted below — logging_config.ContextFilter
+# overwrites it from the request contextvar, which these service-level tests do not set.
 
 
 @pytest.mark.asyncio
-async def test_send_supplier_message_success_logs_debug(httpx_mock, caplog):
-    url = f"{divar.BASE_URL}/v2/open-platform/conversations/conv_123/messages"
-    httpx_mock.post(url).respond(200, json={"status": "ok"})
+async def test_send_supplier_message_success_logs_debug(httpx_mock, caplog, no_sleep):
+    route = httpx_mock.post(SUPPLIER_MSG_URL).respond(200, json={"status": "ok"})
 
     with caplog.at_level("DEBUG", logger="divar"):
         assert await divar.send_supplier_message(
             "conv_123", "Hello", "seller_access_token"
         ) is True
 
+    assert route.call_count == 1
+    no_sleep.assert_not_awaited()
     record = next(
         record
         for record in caplog.records
@@ -255,11 +270,65 @@ async def test_send_supplier_message_success_logs_debug(httpx_mock, caplog):
 
 
 @pytest.mark.asyncio
-async def test_send_supplier_message_failure_logs_error_and_reraises(
-    httpx_mock, caplog
+async def test_send_supplier_message_retries_502_then_succeeds(
+    httpx_mock, caplog, no_sleep
 ):
-    url = f"{divar.BASE_URL}/v2/open-platform/conversations/conv_123/messages"
-    httpx_mock.post(url).respond(502, text="Bad Gateway")
+    route = httpx_mock.post(SUPPLIER_MSG_URL).mock(
+        side_effect=[
+            httpx.Response(502, text="Bad Gateway"),
+            httpx.Response(200, json={"status": "ok"}),
+        ]
+    )
+
+    with caplog.at_level("WARNING", logger="divar"):
+        assert await divar.send_supplier_message(
+            "conv_123", "Hello", "seller_access_token"
+        ) is True
+
+    assert route.call_count == 2
+    assert no_sleep.await_count == 1
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "supplier message attempt failed; retrying"
+    )
+    assert record.status_code == 502
+    assert record.response_body == "Bad Gateway"
+    assert record.attempt == 1
+    assert record.max_attempts == 4
+    assert 1.0 <= record.delay_seconds <= 1.25
+
+
+@pytest.mark.asyncio
+async def test_send_supplier_message_retries_502_three_times_then_succeeds(
+    httpx_mock, no_sleep
+):
+    route = httpx_mock.post(SUPPLIER_MSG_URL).mock(
+        side_effect=[
+            httpx.Response(502, text="Bad Gateway"),
+            httpx.Response(502, text="Bad Gateway"),
+            httpx.Response(502, text="Bad Gateway"),
+            httpx.Response(200, json={"status": "ok"}),
+        ]
+    )
+
+    assert await divar.send_supplier_message(
+        "conv_123", "Hello", "seller_access_token"
+    ) is True
+
+    assert route.call_count == 4
+    assert no_sleep.await_count == 3
+    delays = [call.args[0] for call in no_sleep.await_args_list]
+    assert 1.0 <= delays[0] <= 1.25
+    assert 2.0 <= delays[1] <= 2.25
+    assert 4.0 <= delays[2] <= 4.25
+
+
+@pytest.mark.asyncio
+async def test_send_supplier_message_exhausts_retries_and_reraises(
+    httpx_mock, caplog, no_sleep
+):
+    route = httpx_mock.post(SUPPLIER_MSG_URL).respond(502, text="Bad Gateway")
 
     with caplog.at_level("ERROR", logger="divar"):
         with pytest.raises(httpx.HTTPStatusError):
@@ -267,13 +336,137 @@ async def test_send_supplier_message_failure_logs_error_and_reraises(
                 "conv_123", "Hello", "seller_access_token"
             )
 
+    assert route.call_count == 4
+    assert no_sleep.await_count == 3
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "supplier message send exhausted retries"
+    )
+    assert record.status_code == 502
+    assert record.response_body == "Bad Gateway"
+    assert record.attempts == 4
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404, 422, 500])
+@pytest.mark.asyncio
+async def test_send_supplier_message_does_not_retry_non_transient_status(
+    httpx_mock, caplog, no_sleep, status_code
+):
+    route = httpx_mock.post(SUPPLIER_MSG_URL).respond(status_code, text="nope")
+
+    with caplog.at_level("ERROR", logger="divar"):
+        with pytest.raises(httpx.HTTPStatusError):
+            await divar.send_supplier_message(
+                "conv_123", "Hello", "seller_access_token"
+            )
+
+    assert route.call_count == 1
+    no_sleep.assert_not_awaited()
     record = next(
         record
         for record in caplog.records
         if record.message == "send_supplier_message failed"
     )
-    assert record.status_code == 502
-    assert record.response_body == "Bad Gateway"
+    assert record.status_code == status_code
+    assert record.response_body == "nope"
+
+
+@pytest.mark.asyncio
+async def test_send_supplier_message_retries_503(httpx_mock, no_sleep):
+    route = httpx_mock.post(SUPPLIER_MSG_URL).mock(
+        side_effect=[
+            httpx.Response(503, text="Service Unavailable"),
+            httpx.Response(200, json={"status": "ok"}),
+        ]
+    )
+
+    assert await divar.send_supplier_message(
+        "conv_123", "Hello", "seller_access_token"
+    ) is True
+
+    assert route.call_count == 2
+    assert no_sleep.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_send_supplier_message_retries_504_with_duplicate_risk_warning(
+    httpx_mock, caplog, no_sleep
+):
+    route = httpx_mock.post(SUPPLIER_MSG_URL).mock(
+        side_effect=[
+            httpx.Response(504, text="Gateway Timeout"),
+            httpx.Response(200, json={"status": "ok"}),
+        ]
+    )
+
+    with caplog.at_level("WARNING", logger="divar"):
+        assert await divar.send_supplier_message(
+            "conv_123", "Hello", "seller_access_token"
+        ) is True
+
+    assert route.call_count == 2
+    assert no_sleep.await_count == 1
+    record = next(
+        record
+        for record in caplog.records
+        if "possible duplicate delivery risk" in record.message
+    )
+    assert "504" in record.message
+    assert record.status_code == 504
+    assert record.attempt == 1
+
+
+@pytest.mark.asyncio
+async def test_send_supplier_message_retries_transient_network_error(
+    httpx_mock, caplog, no_sleep
+):
+    route = httpx_mock.post(SUPPLIER_MSG_URL).mock(
+        side_effect=[
+            httpx.ConnectError("connection refused"),
+            httpx.Response(200, json={"status": "ok"}),
+        ]
+    )
+
+    with caplog.at_level("WARNING", logger="divar"):
+        assert await divar.send_supplier_message(
+            "conv_123", "Hello", "seller_access_token"
+        ) is True
+
+    assert route.call_count == 2
+    assert no_sleep.await_count == 1
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "supplier message network error; retrying"
+    )
+    assert record.attempt == 1
+    assert record.max_attempts == 4
+    assert "connection refused" in record.error
+
+
+@pytest.mark.asyncio
+async def test_send_supplier_message_exhausts_retries_on_network_error(
+    httpx_mock, caplog, no_sleep
+):
+    route = httpx_mock.post(SUPPLIER_MSG_URL).mock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+
+    with caplog.at_level("ERROR", logger="divar"):
+        with pytest.raises(httpx.ConnectError):
+            await divar.send_supplier_message(
+                "conv_123", "Hello", "seller_access_token"
+            )
+
+    assert route.call_count == 4
+    assert no_sleep.await_count == 3
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "supplier message send exhausted retries"
+    )
+    assert record.attempts == 4
 
 
 # ---------------------------------------------------------------------------

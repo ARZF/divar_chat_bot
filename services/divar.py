@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import random
 import httpx
 from config import settings
 
@@ -8,6 +10,29 @@ client: httpx.AsyncClient = None  # Set at startup via lifespan in main.py
 
 BASE_URL = "https://open-api.divar.ir"
 USER_URL = f"{BASE_URL}/v1/open-platform/users"
+
+# --- Retry policy — send_supplier_message only ---
+# Divar's API/CDN intermittently returns 502 for this endpoint. Only gateway-level
+# statuses are retried: 500 means the upstream handled the request and failed, and
+# 4xx (including 401/403/429) can never be fixed by repeating the same request.
+# The v2 send-message endpoint (docs/chat/users_conversations.md) documents no
+# idempotency key, so 504 is retried under an explicit duplicate-delivery risk —
+# see _log_supplier_retry.
+RETRYABLE_STATUS_CODES = {502, 503, 504}
+# Transport errors where a usable response was never received. httpx.NetworkError
+# is the parent of ConnectError/ReadError/WriteError/CloseError, so those subclasses
+# are not repeated here. Timeouts are a separate hierarchy: ConnectTimeout and
+# ReadTimeout are safe to retry, but PoolTimeout/WriteTimeout are not listed.
+RETRYABLE_EXCEPTIONS = (
+    httpx.NetworkError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.RemoteProtocolError,
+)
+MAX_RETRIES = 3
+MAX_ATTEMPTS = MAX_RETRIES + 1
+RETRY_BACKOFF_BASE = 1.0
+RETRY_JITTER_MAX = 0.25
 
 
 def _api_key_headers() -> dict:
@@ -140,34 +165,113 @@ async def send_message(conversation_id: str, text: str) -> bool:
     return True
 
 
+def _supplier_retry_delay(attempt: int) -> float:
+    """Exponential backoff with jitter, so concurrent senders do not retry in lockstep."""
+    return RETRY_BACKOFF_BASE * (2 ** attempt) + random.uniform(0, RETRY_JITTER_MAX)
+
+
 async def send_supplier_message(
     conversation_id: str, text: str, access_token: str
 ) -> bool:
+    """Send a seller-authorized message, retrying only transient gateway failures.
+
+    Token refresh stays in ``chatbot.handle_supplier_message`` — a 401 here is never
+    retried or refreshed. Bounded at ``MAX_ATTEMPTS`` because this endpoint has a real
+    send side effect and Divar documents no idempotency key.
+    """
     url = f"{BASE_URL}/v2/open-platform/conversations/{conversation_id}/messages"
     payload = {"type": "TEXT", "message": text}
 
-    response = await client.post(
-        url,
-        headers=_oauth_headers(access_token),
-        json=payload,
-    )
-    try:
-        response.raise_for_status()
-    except httpx.HTTPStatusError:
-        logger.error(
-            "send_supplier_message failed",
-            extra={
-                "status_code": response.status_code,
-                "response_body": response.text,
-            },
-        )
-        raise
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            response = await client.post(
+                url,
+                headers=_oauth_headers(access_token),
+                json=payload,
+            )
 
-    logger.debug(
-        "send_supplier_message succeeded",
-        extra={"status_code": response.status_code},
-    )
-    return True
+            if response.status_code in RETRYABLE_STATUS_CODES:
+                if attempt < MAX_ATTEMPTS:
+                    delay = _supplier_retry_delay(attempt - 1)
+                    # 504 is called out separately: the upstream may have already
+                    # delivered the message before the gateway gave up waiting, so a
+                    # retry can duplicate it. Greppable apart from ordinary 502/503.
+                    message = (
+                        "supplier message retrying 504 - possible duplicate delivery risk"
+                        if response.status_code == 504
+                        else "supplier message attempt failed; retrying"
+                    )
+                    logger.warning(
+                        message,
+                        extra={
+                            "status_code": response.status_code,
+                            "response_body": response.text,
+                            "conversation_id": conversation_id,
+                            "attempt": attempt,
+                            "max_attempts": MAX_ATTEMPTS,
+                            "delay_seconds": delay,
+                        },
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                logger.error(
+                    "supplier message send exhausted retries",
+                    extra={
+                        "status_code": response.status_code,
+                        "response_body": response.text,
+                        "conversation_id": conversation_id,
+                        "attempts": MAX_ATTEMPTS,
+                    },
+                )
+                # Always raises: the status is one of RETRYABLE_STATUS_CODES.
+                response.raise_for_status()
+
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                logger.error(
+                    "send_supplier_message failed",
+                    extra={
+                        "status_code": response.status_code,
+                        "response_body": response.text,
+                    },
+                )
+                raise
+
+            logger.debug(
+                "send_supplier_message succeeded",
+                extra={"status_code": response.status_code},
+            )
+            return True
+
+        except RETRYABLE_EXCEPTIONS as exc:
+            if attempt < MAX_ATTEMPTS:
+                delay = _supplier_retry_delay(attempt - 1)
+                logger.warning(
+                    "supplier message network error; retrying",
+                    extra={
+                        "conversation_id": conversation_id,
+                        "attempt": attempt,
+                        "max_attempts": MAX_ATTEMPTS,
+                        "delay_seconds": delay,
+                        "error": str(exc),
+                    },
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            logger.error(
+                "supplier message send exhausted retries",
+                extra={
+                    "conversation_id": conversation_id,
+                    "attempts": MAX_ATTEMPTS,
+                    "error": str(exc),
+                },
+            )
+            raise
+
+    raise RuntimeError("send_supplier_message retry loop exited without a result")
 
 
 async def register_event_subscription(access_token: str) -> bool:
