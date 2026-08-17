@@ -58,7 +58,7 @@ def _new_message_payload(
             },
             "sender": {"side": sender_side, "type": "HUMAN"},
             "type": "TEXT",
-            "sent_at": 1729429926140000,
+            "sent_at": "2024-10-20T16:52:06Z",
             "text": text,
         },
     }
@@ -183,10 +183,12 @@ def test_realistic_divar_webhook_payload(client, mocker):
       new_chatbot_message.text, .id, .conversation.id, .conversation.type: "BOT",
       .sender.type: "HUMAN", .type: "TEXT", .sent_at
 
-    NOTE: The docs show sent_at as an integer (microseconds: 1729429926140000),
-    but schemas/webhook.py declares sent_at as datetime.  Pydantic v2 cannot parse
-    such a large integer as a Unix timestamp, so this test uses an ISO 8601 string
-    instead.  The sent_at format mismatch is a real finding — see the final summary.
+    sent_at is sent as an ISO 8601 string to match schemas/webhook.py, which declares
+    it as datetime.  docs/chat/chatbot_conversations.md and docs/events/chat.md show a
+    microsecond int64 (1729429926140000), but production logs confirm live Divar
+    webhooks are accepted with 200 against the datetime schema — so the docs' integer
+    example does not reflect what Divar actually sends.  Tests follow the verified
+    production behaviour, not the docs.
 
     NOTE: schemas/webhook.py already includes new_chatbot_message.id and
     new_chatbot_message.type fields, even though PLAN.md task 1.3 marks them as
