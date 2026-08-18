@@ -7,3 +7,8 @@ class ConversationState(StrEnum):
     PRICE_MENU = "PRICE_MENU"
     SERVICE_MENU = "SERVICE_MENU"
     HUMAN_SUPPORT = "HUMAN_SUPPORT"
+
+
+class PostConversationState(StrEnum):
+    NEW = "NEW"
+    ACTIVE = "ACTIVE"

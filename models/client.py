@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from models.conversation import Conversation
     from models.oauth_token import OAuthToken
     from models.post import Post
+    from models.post_conversation import PostConversation
     from models.product import Product
     from models.refresh_token import RefreshToken
 
@@ -46,6 +47,9 @@ class Client(Base):
         back_populates="client"
     )
     posts: Mapped[list[Post]] = relationship(back_populates="client")
+    post_conversations: Mapped[list[PostConversation]] = relationship(
+        back_populates="client"
+    )
     products: Mapped[list[Product]] = relationship(back_populates="client")
     conversations: Mapped[list[Conversation]] = relationship(
         back_populates="client"
