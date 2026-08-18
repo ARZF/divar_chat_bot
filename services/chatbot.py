@@ -13,13 +13,16 @@ from config import settings
 from db.session import AsyncSessionLocal
 from logging_config import client_id_var, conversation_id_var
 from models.conversation import Conversation
+from models.enums import PostConversationState
 from models.oauth_token import OAuthToken
 from models.post import Post
+from models.post_conversation import PostConversation
+from models.post_message import PostMessage, PostSenderType
 from services.price_lookup import (
-    get_price,
-    normalize_text,
-    find_top_matches,
     get_all_matching_prices,
+    get_price,
+    find_top_matches,
+    normalize_text,
     refresh_lookup_cache,
 )
 from services.state_machine import INTENT_EVENTS, ConversationState, transition
@@ -232,6 +235,47 @@ def _extract_product_name(normalized_text: str) -> str:
     return " ".join(clean_tokens).strip()
 
 
+async def generate_chatbot_reply(
+    db: AsyncSession,
+    client_id: int,
+    user_text: str,
+    *,
+    message_history: list[tuple[str, str]] | None = None,
+) -> str | None:
+    """Generate a stateless chatbot reply for either conversation type.
+
+    `message_history` is accepted as the forward-compatible seam for a future
+    history-aware implementation. The current intent-matching logic is still
+    purely text-driven and does not inspect it.
+    """
+    _ = message_history
+
+    normalized_text = normalize_text(user_text)
+    if not normalized_text:
+        return settings.FALLBACK_MESSAGE
+
+    intent = _match_intent(normalized_text)
+    if intent == "PRICE":
+        return await _handle_price_intent(db, client_id, normalized_text)
+    if intent in ("WARRANTY", "SUPPORT"):
+        base = (
+            settings.WARRANTY_MESSAGE
+            if intent == "WARRANTY"
+            else settings.SUPPORT_MESSAGE
+        )
+        contact = settings.CONTACT_MESSAGE_TEMPLATE.format(
+            phone=settings.SUPPORT_PHONE_NUMBER
+        )
+        return f"{base}\n{contact}"
+    if intent == "MENU":
+        return settings.MENU_MESSAGE
+    if intent == "SERVICE":
+        return settings.SERVICE_MENU_MESSAGE
+    if _is_pure_greeting(normalized_text):
+        return settings.GREETING_REPLY_MESSAGE
+    return settings.FALLBACK_MESSAGE
+
+
 async def _refresh_supplier_token(client_id: int) -> Optional[str]:
     """Refresh one seller's expired Divar token and return the new access token.
 
@@ -303,14 +347,114 @@ async def _refresh_supplier_token(client_id: int) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Main orchestrator — opens its own DB session (BackgroundTask-safe)
+# Post-conversation helpers
 # ---------------------------------------------------------------------------
-async def handle_supplier_message(
-    conversation_id: str, post_token: str, text: str
+async def _resolve_post_conversation(
+    db: AsyncSession,
+    *,
+    client_id: int,
+    conversation_id: str,
+    post_token: str,
+) -> PostConversation | None:
+    """Create or load an isolated post conversation, failing safe on ownership mismatch."""
+    insert_stmt = (
+        pg_insert(PostConversation)
+        .values(
+            client_id=client_id,
+            divar_conversation_id=conversation_id,
+            post_token=post_token,
+            current_state=PostConversationState.NEW.value,
+        )
+        .on_conflict_do_nothing(
+            constraint="uq_post_conversations_divar_conversation_id"
+        )
+    )
+
+    try:
+        result = await db.execute(insert_stmt)
+    except IntegrityError:
+        await db.rollback()
+        owner_client_id = (
+            await db.execute(
+                select(PostConversation.client_id).where(
+                    PostConversation.divar_conversation_id == conversation_id
+                )
+            )
+        ).scalar_one_or_none()
+        logger.error(
+            "post conversation id already owned by another client — refusing to attribute this conversation",
+            extra={
+                "divar_conversation_id": conversation_id,
+                "owner_client_id": owner_client_id,
+                "claiming_client_id": client_id,
+                "post_token": post_token,
+            },
+        )
+        return None
+
+    post_conversation = (
+        await db.execute(
+            select(PostConversation).where(
+                PostConversation.divar_conversation_id == conversation_id
+            )
+        )
+    ).scalar_one_or_none()
+    if post_conversation is None:
+        return None
+    if post_conversation.client_id != client_id:
+        logger.error(
+            "post conversation id already owned by another client — refusing to attribute this conversation",
+            extra={
+                "divar_conversation_id": conversation_id,
+                "owner_client_id": post_conversation.client_id,
+                "claiming_client_id": client_id,
+                "post_token": post_token,
+                "inserted": result.rowcount == 1,
+            },
+        )
+        await db.rollback()
+        return None
+    return post_conversation
+
+
+async def _load_post_message_history(
+    db: AsyncSession,
+    post_conversation_id: int,
+    *,
+    limit: int = 10,
+) -> list[tuple[str, str]]:
+    """Return the recent post-conversation history, oldest first."""
+    rows = (
+        await db.execute(
+            select(PostMessage.sender_type, PostMessage.text_content)
+            .where(PostMessage.post_conversation_id == post_conversation_id)
+            .order_by(PostMessage.created_at.desc(), PostMessage.id.desc())
+            .limit(limit)
+        )
+    ).all()
+    rows = list(reversed(rows))
+    return [
+        (sender_type.value, text_content or "")
+        for sender_type, text_content in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Main orchestrators — open their own DB sessions (BackgroundTask-safe)
+# ---------------------------------------------------------------------------
+async def handle_post_bot_reply(
+    conversation_id: str,
+    post_token: str,
+    user_text: str,
+    divar_message_id: str,
 ) -> None:
-    """Resolve a supplier post chat and send the seller-authorized reply."""
+    """Process a buyer message in a post conversation and send the bot reply."""
     client_id_var.set("-")
     conversation_id_var.set(conversation_id)
+    logger.info(
+        "post message received",
+        extra={"conversation_id": conversation_id},
+    )
 
     async with AsyncSessionLocal() as db:
         client_id = (
@@ -329,6 +473,47 @@ async def handle_supplier_message(
             return
 
         client_id_var.set(str(client_id))
+        post_conversation = await _resolve_post_conversation(
+            db,
+            client_id=client_id,
+            conversation_id=conversation_id,
+            post_token=post_token,
+        )
+        if post_conversation is None:
+            return
+
+        buyer_insert = await db.execute(
+            pg_insert(PostMessage)
+            .values(
+                post_conversation_id=post_conversation.id,
+                divar_message_id=divar_message_id,
+                sender_type=PostSenderType.BUYER.value,
+                text_content=user_text,
+            )
+            .on_conflict_do_nothing(
+                constraint="uq_post_messages_divar_message_id"
+            )
+        )
+        if buyer_insert.rowcount != 1:
+            await db.rollback()
+            return
+
+        history = await _load_post_message_history(db, post_conversation.id)
+        reply = await generate_chatbot_reply(
+            db,
+            client_id,
+            user_text,
+            message_history=history,
+        )
+        if reply is None:
+            await db.commit()
+            return
+
+        logger.info(
+            "chatbot reply generated",
+            extra={"conversation_id": conversation_id, "reply": reply},
+        )
+
         oauth_token = (
             await db.execute(
                 select(OAuthToken).where(OAuthToken.client_id == client_id)
@@ -342,41 +527,48 @@ async def handle_supplier_message(
                     "conversation_id": conversation_id,
                 },
             )
+            await db.rollback()
             return
+
         access_token = oauth_token.divar_access_token
         token_expires_at = oauth_token.token_expires_at
+        if token_expires_at.tzinfo is None:
+            token_expires_at = token_expires_at.replace(tzinfo=timezone.utc)
+        if token_expires_at <= datetime.now(timezone.utc):
+            access_token = await _refresh_supplier_token(client_id)
+            if access_token is None:
+                await db.rollback()
+                return
 
-    client_id_var.set(str(client_id))
-
-    if token_expires_at.tzinfo is None:
-        token_expires_at = token_expires_at.replace(tzinfo=timezone.utc)
-    if token_expires_at <= datetime.now(timezone.utc):
-        access_token = await _refresh_supplier_token(client_id)
-        if access_token is None:
+        try:
+            await divar_service.send_supplier_message(
+                conversation_id, reply, access_token
+            )
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "supplier message send failed",
+                extra={
+                    "status_code": exc.response.status_code,
+                    "client_id": client_id,
+                    "conversation_id": conversation_id,
+                },
+            )
+            await db.rollback()
             return
 
-    try:
-        await divar_service.send_supplier_message(
-            conversation_id, text, access_token
+        db.add(
+            PostMessage(
+                post_conversation_id=post_conversation.id,
+                sender_type=PostSenderType.BOT,
+                text_content=reply,
+            )
         )
-    except httpx.HTTPStatusError as exc:
-        logger.error(
-            "supplier message send failed",
-            extra={
-                "status_code": exc.response.status_code,
-                "client_id": client_id,
-                "conversation_id": conversation_id,
-            },
-        )
-        return
+        post_conversation.current_state = PostConversationState.ACTIVE
+        await db.commit()
 
     logger.info(
-        "supplier reply sent",
-        extra={
-            "client_id": client_id,
-            "conversation_id": conversation_id,
-            "send_method": "send_supplier_message",
-        },
+        "post chatbot reply sent",
+        extra={"conversation_id": conversation_id},
     )
 
 
@@ -447,31 +639,11 @@ async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
         if event is not None:
             conv.current_state = transition(_state_of(conv), event).value
 
-        if intent == "PRICE":
-            reply = await _handle_price_intent(db, client_id, normalized_text)
-        elif intent in ("WARRANTY", "SUPPORT"):
-            base = (
-                settings.WARRANTY_MESSAGE
-                if intent == "WARRANTY"
-                else settings.SUPPORT_MESSAGE
-            )
-            contact = settings.CONTACT_MESSAGE_TEMPLATE.format(
-                phone=settings.SUPPORT_PHONE_NUMBER
-            )
-            reply = f"{base}\n{contact}"
-        elif intent == "MENU":
-            reply = settings.MENU_MESSAGE
-        elif intent == "SERVICE":
-            reply = settings.SERVICE_MENU_MESSAGE
-        elif _is_pure_greeting(normalized_text):
-            if is_new:
-                # Welcome already covers it — but the state change still needs saving.
-                logger.debug("greeting suppressed — welcome already sent")
-                reply = None
-            else:
-                reply = settings.GREETING_REPLY_MESSAGE
-        else:
-            reply = settings.FALLBACK_MESSAGE
+        reply = await generate_chatbot_reply(db, client_id, user_text)
+        if is_new and _is_pure_greeting(normalized_text):
+            # Welcome already covers it — but the state change still needs saving.
+            logger.debug("greeting suppressed — welcome already sent")
+            reply = None
 
         # ---- 6. Persist state, then send ----
         # One transaction for the whole webhook (2.6). Committed BEFORE the send

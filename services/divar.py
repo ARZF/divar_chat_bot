@@ -175,7 +175,7 @@ async def send_supplier_message(
 ) -> bool:
     """Send a seller-authorized message, retrying only transient gateway failures.
 
-    Token refresh stays in ``chatbot.handle_supplier_message`` — a 401 here is never
+    Token refresh stays in ``chatbot.handle_post_bot_reply`` — a 401 here is never
     retried or refreshed. Bounded at ``MAX_ATTEMPTS`` because this endpoint has a real
     send side effect and Divar documents no idempotency key.
     """

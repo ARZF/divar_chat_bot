@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from config import settings
 from logging_config import conversation_id_var
 from schemas.webhook import EventType, WebhookSchema
-from services.chatbot import handle_bot_reply, handle_supplier_message
+from services.chatbot import handle_bot_reply, handle_post_bot_reply
 import logging
 
 router = APIRouter()
@@ -47,17 +47,18 @@ async def webhook(
 
     if payload.type == EventType.NEW_MESSAGE:
         message = payload.new_message
-        if not message or message.sender.side != "BUYER":
+        if not message or message.sender.side != "BUYER" or not message.text:
             return JSONResponse(status_code=200, content={"status": "ignored"})
 
         conversation_id = message.conversation.id
         post_token = message.conversation.post_token
         conversation_id_var.set(conversation_id)
         background_tasks.add_task(
-            handle_supplier_message,
+            handle_post_bot_reply,
             conversation_id,
             post_token,
             message.text,
+            message.id,
         )
         return JSONResponse(status_code=200, content={"status": "ok"})
 
