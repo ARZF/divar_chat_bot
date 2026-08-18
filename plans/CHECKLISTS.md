@@ -68,6 +68,7 @@
 - Analytics dashboard per tenant
 - External CRM integration
 - Multi-agent AI support workflows
+- [ ] Extend `services/chatbot.py::generate_chatbot_reply(..., message_history=None)` in Phase 4 through `services/ai.py`; both BOT and POST orchestrators already share this seam, and POST supplies the latest ten isolated messages oldest-first.
 - Admin billing panels
 - Redis-backed rate limiting
 - pgvector RAG for catalog search
@@ -130,6 +131,16 @@
 **Not blocked on the above, already fixed 2026-08-13** (see CHANGELOG): refresh-token
 rotation replay window and the OAuth token upsert race — both were independent of SMS
 and didn't need to wait.
+
+### Post-chat test coverage (Phase 2.9)
+
+- [x] Webhook tests cover buyer dispatch, seller no-op, blank-text no-op, and unknown-post handling.
+- [x] Chatbot tests cover post-conversation persistence, message deduplication, history isolation,
+      missing OAuth credentials, token refresh and event re-registration, send failures, and
+      cross-client conversation rejection.
+- [x] Divar service tests cover supplier-message success, transient retries, non-transient
+      failures, network failures, and retry exhaustion.
+
 
 ### Deployment & Security
 

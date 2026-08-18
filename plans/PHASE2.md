@@ -818,7 +818,7 @@ async def get_current_client_id(
          event we have deliberately chosen not to act on).
        > **Resolution point (2026-08-16):** this closes the second of the two open questions
        > recorded in the 2026-07-2X CHANGELOG entry. The lookup happens in
-       > `services/chatbot.py::handle_supplier_message` (inside the background task), not in
+       > `services/chatbot.py::handle_post_bot_reply` (inside the background task), not in
        > the webhook handler — so the 200 is returned before resolution is even attempted,
        > which satisfies the "return 200 immediately" requirement by construction. The
        > warning is logged with both `post_token` and `conversation_id` as specified.
@@ -876,7 +876,7 @@ async def get_current_client_id(
 > **The fix.** `refresh_access_token(current_access_token, refresh_token)` now takes the
 > refresh token explicitly — no `settings` read remains in it. Both arguments must belong to
 > the same seller, which the docstring states, because Divar rotates the refresh token on
-> every call. The refresh/persist logic moved out of `handle_supplier_message` into
+> every call. The refresh/persist logic moved out of `handle_post_bot_reply` into
 > `services/chatbot.py::_refresh_supplier_token(client_id) -> Optional[str]`, which returns
 > `None` on failure to mean "send nothing."
 >
@@ -907,6 +907,39 @@ async def get_current_client_id(
 > `.env` plus six test modules, which does not belong in a bug-fix commit. Logged in
 > `CHECKLISTS.md` under Config Cleanup next to the existing `admin_token` item.
 
+
+### 2.9a Isolated post-conversation memory and shared reply seam
+
+The `POST` conversation path uses the new `post_conversations` and `post_messages` tables exclusively; it does not reuse the existing chatbot `conversations` or `messages` tables. `post_conversations.current_state` is only `NEW` or `ACTIVE` for lifecycle tracking, not a menu state machine. Buyer messages are deduplicated by unique `divar_message_id` before reply generation, and the last ten messages are passed oldest-first through `message_history`.
+
+Both conversation types delegate text intent and price handling to:
+
+```python
+async def generate_chatbot_reply(
+    db, client_id, user_text, *, message_history=None
+) -> str | None:
+```
+
+The current implementation remains stateless and may ignore `message_history`; Phase 4's `services/ai.py` can extend this seam without changing either webhook orchestrator.
+
+### Post-chat test requirements (A-J)
+
+The post-chat implementation and tests must keep these ten acceptance requirements aligned:
+
+- [x] **A.** Dispatch `NEW_MESSAGE` buyer events to `handle_post_bot_reply` with the conversation, post, text, and Divar message IDs.
+- [x] **B.** Ignore seller-originated post messages with HTTP 200 and no background task.
+- [x] **C.** Ignore blank post-message text with HTTP 200 and no background task.
+- [x] **D.** Resolve the seller from `conversation.post_token`, without `/start` parsing.
+- [x] **E.** Log and stop when the post token is unknown; do not send or persist a reply.
+- [x] **F.** Persist buyer and bot messages and advance the post conversation to `ACTIVE` after a successful reply.
+- [x] **G.** Deduplicate redelivered buyer messages by `divar_message_id`.
+- [x] **H.** Keep post-conversation history isolated and pass recent history to reply generation.
+- [x] **I.** Use the seller's OAuth token, refresh expired credentials per seller, and re-register the event subscription after refresh.
+- [x] **J.** Fail closed for missing OAuth credentials, send failures, and cross-client conversation ownership conflicts.
+
+These requirements cover the active post-chat tests in `tests/test_webhook.py`,
+`tests/test_chatbot.py`, and `tests/test_divar_service.py`. They do not alter the
+existing `NEW_CHATBOT_MESSAGE` path.
 
 ### Explicitly out of scope for this section
 

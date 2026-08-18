@@ -31,7 +31,7 @@
   that was blocked behind it, and closed the concurrency hole the fix exposed.
 
   **The defect.** `refresh_access_token()` read `settings.DIVAR_REFRESH_TOKEN` from `.env`
-  while its only caller, `handle_supplier_message`, persisted the returned pair onto a
+  while its only caller, `handle_post_bot_reply`, persisted the returned pair onto a
   specific seller's `oauth_tokens` row. Every per-seller refresh was therefore attempted with
   the global bootstrap credential, and its result overwrote that seller's stored tokens.
 
@@ -39,7 +39,7 @@
   `refresh_access_token(current_access_token, refresh_token)` — no `settings` read remains in
   the function, and the docstring states that both arguments must belong to the same seller,
   since Divar rotates the refresh token on every call. The refresh/persist logic moved out of
-  `handle_supplier_message` into `services/chatbot.py::_refresh_supplier_token(client_id)
+  `handle_post_bot_reply` into `services/chatbot.py::_refresh_supplier_token(client_id)
   -> Optional[str]`, returning `None` to mean "refresh failed, send nothing." The caller
   shrank to a four-line call, so the expired-token branch now has one owner.
 
@@ -100,7 +100,7 @@
   "NEW_MESSAGE_ON_POST"}`, no `event_resource_id`). `schemas/webhook.py` gained the
   `NEW_MESSAGE` enum member and the `new_message` field; `api/webhook.py` dispatches on
   `payload.type` and drops non-`BUYER` senders. `services/chatbot.py` gained
-  `handle_supplier_message`, which resolves `post_token → posts.client_id` and sends the
+  `handle_post_bot_reply`, which resolves `post_token → posts.client_id` and sends the
   seller-authorized reply. `/oauth/callback` registers the subscription after login.
   Verified against docs: the endpoint, body field, and auth of `send_supplier_message` match
   `docs/chat/users_conversations.md`; omitting `event_resource_id` to mean "all posts" matches
@@ -123,7 +123,7 @@
 
   **`expires_in` fix (`167658f`).** `refresh_access_token()` now returns the real
   `expires_in` from the token response as a third tuple element, and
-  `handle_supplier_message` computes `token_expires_at` from it instead of hardcoding 7 days.
+  `handle_post_bot_reply` computes `token_expires_at` from it instead of hardcoding 7 days.
   This aligns with the 2026-07-20 live-test finding that `expires_in` was `604800`, not the
   documented `3600`, and with §2.3's "never hardcode 3600" note.
 
