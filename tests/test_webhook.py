@@ -235,7 +235,7 @@ def test_realistic_divar_webhook_payload(client, mocker):
 
 
 def test_new_message_buyer_schedules_supplier_handler(client, mocker):
-    mock_handle = mocker.patch("api.webhook.handle_supplier_message")
+    mock_handle = mocker.patch("api.webhook.handle_post_bot_reply")
 
     response = client.post(
         "/api/v1/webhook",
@@ -246,13 +246,13 @@ def test_new_message_buyer_schedules_supplier_handler(client, mocker):
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
     mock_handle.assert_called_once_with(
-        "post_conv_123", "gZd7omnS", "آیا موجود است؟"
+        "post_conv_123", "gZd7omnS", "آیا موجود است؟", "msg_post_001"
     )
 
 
 
 def test_new_message_seller_is_no_op(client, mocker):
-    mock_handle = mocker.patch("api.webhook.handle_supplier_message")
+    mock_handle = mocker.patch("api.webhook.handle_post_bot_reply")
 
     response = client.post(
         "/api/v1/webhook",
@@ -265,9 +265,23 @@ def test_new_message_seller_is_no_op(client, mocker):
     mock_handle.assert_not_called()
 
 
+def test_new_message_blank_text_is_no_op(client, mocker):
+    mock_handle = mocker.patch("api.webhook.handle_post_bot_reply")
+
+    response = client.post(
+        "/api/v1/webhook",
+        json=_new_message_payload(text=""),
+        headers={"Authorization": WEBHOOK_SECRET},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored"}
+    mock_handle.assert_not_called()
+
+
 
 def test_new_message_schedules_unresolved_post_for_background_handling(client, mocker):
-    mock_handle = mocker.patch("api.webhook.handle_supplier_message")
+    mock_handle = mocker.patch("api.webhook.handle_post_bot_reply")
 
     response = client.post(
         "/api/v1/webhook",
@@ -280,4 +294,4 @@ def test_new_message_schedules_unresolved_post_for_background_handling(client, m
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
-    mock_handle.assert_called_once_with("unknown_conv", "unknown1", "آیا موجود است؟")
+    mock_handle.assert_called_once_with("unknown_conv", "unknown1", "آیا موجود است؟", "msg_post_001")
