@@ -596,3 +596,73 @@ async def test_refresh_access_token_uses_callers_refresh_token_not_global_settin
     assert body["refresh_token"] == ["seller_refresh"]
     assert body["refresh_token"] != [settings.DIVAR_REFRESH_TOKEN]
 
+
+# ---------------------------------------------------------------------------
+# Shared client timeout — main.py's lifespan (2026-08-19 incident)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def lifespan_isolation(mocker):
+    """Run main.lifespan without its unrelated global side effects.
+
+    ``_warm_price_caches`` would hit the real DB, and ``setup_logging`` replaces the root
+    handlers (evicting pytest's caplog handler) and pins the root level. Neither is under
+    test here. The lifespan also ``aclose()``s ``divar.client`` on exit, so the original
+    module-level client is restored afterwards for the tests that follow.
+    """
+    mocker.patch("main._warm_price_caches", new_callable=AsyncMock)
+    mocker.patch("main.setup_logging")
+    original_client = divar.client
+    yield
+    divar.client = original_client
+
+
+@pytest.mark.asyncio
+async def test_lifespan_client_timeout_comes_from_settings(mocker, lifespan_isolation):
+    """The shared client must not carry the old hardcoded `timeout=60`.
+
+    Patching the settings to values no literal in the codebase uses means this can only
+    pass if the values are genuinely read from `settings` at lifespan time.
+    """
+    import main
+
+    mocker.patch.object(settings, "DIVAR_CLIENT_CONNECT_TIMEOUT_SECONDS", 3.5)
+    mocker.patch.object(settings, "DIVAR_CLIENT_TOTAL_TIMEOUT_SECONDS", 11.25)
+
+    async with main.lifespan(main.app):
+        timeout = divar.client.timeout
+
+    assert timeout.connect == 3.5
+    # httpx.Timeout(total, connect=...) applies `total` to the other three phases.
+    assert (timeout.read, timeout.write, timeout.pool) == (11.25, 11.25, 11.25)
+
+
+@pytest.mark.asyncio
+async def test_lifespan_client_timeout_reaches_outgoing_requests(
+    mocker, lifespan_isolation
+):
+    """End-to-end: a settings override must change the timeout httpx actually applies.
+
+    Asserting on the constructed client alone would not prove the per-request transport
+    sees it — no call site in divar.py overrides the timeout, so every Divar call inherits
+    this. `send_message` stands in for the whole module (it shares the same client).
+    """
+    mocker.patch.object(settings, "DIVAR_CLIENT_CONNECT_TIMEOUT_SECONDS", 1.5)
+    mocker.patch.object(settings, "DIVAR_CLIENT_TOTAL_TIMEOUT_SECONDS", 2.5)
+    import main
+
+    with respx.mock(assert_all_called=False) as router:
+        route = router.post(SEND_MSG_URL.format(conv_id="conv_123")).respond(
+            200, json={"status": "ok"}
+        )
+        async with main.lifespan(main.app):
+            await divar.send_message("conv_123", "Hello")
+
+    assert route.calls[0].request.extensions["timeout"] == {
+        "connect": 1.5,
+        "read": 2.5,
+        "write": 2.5,
+        "pool": 2.5,
+    }
+
