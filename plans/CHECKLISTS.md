@@ -77,6 +77,21 @@
       `MAX_ATTEMPTS` is logged with full context and swallowed — but the buyer never gets a
       reply and the seller is never alerted. Needs a retry queue, dead-letter store, or at
       minimum an alert. Explicitly out of scope of that fix; see `CHANGELOG.md` 2026-08-19.
+- [ ] `services/post_conversation.py::handle_post_bot_reply` holds its `AsyncSessionLocal`
+      DB session open for the full duration of the `send_supplier_message` HTTP call,
+      including all retry/backoff time (worst case ~27–68s after the 2026-08-19 timeout
+      fix, previously up to ~4 minutes). A DB connection from the pool is held idle for
+      that entire window. Under a Divar-side network blip affecting several buyers at
+      once, multiple concurrent `handle_post_bot_reply` background tasks could each hold
+      a connection for tens of seconds, exhausting the pool and causing unrelated
+      requests (other webhooks, seller-facing endpoints) to fail on connection
+      acquisition — a resource-exhaustion risk, not just latency. Not fixed in the
+      2026-08-19 timeout/exception-type pass (out of scope for that task). Candidate fix:
+      restructure `handle_post_bot_reply` so the DB session is only open for the DB read/
+      write portions, and `send_supplier_message` is called with no session held (e.g.
+      resolve/persist before the send, reopen a session only for the final commit of the
+      bot's reply + state update). Needs its own scoped task — touches transaction
+      boundaries around dedup-insert, history load, and the final `db.commit()`.
 
 ### Authentication
 
