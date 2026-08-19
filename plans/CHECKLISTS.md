@@ -72,6 +72,11 @@
 - Admin billing panels
 - Redis-backed rate limiting
 - pgvector RAG for catalog search
+- [ ] **No redelivery / dead-letter path for exhausted supplier messages.** After the
+      2026-08-19 timeout + exception-type fix, a `send_supplier_message` call that burns all
+      `MAX_ATTEMPTS` is logged with full context and swallowed — but the buyer never gets a
+      reply and the seller is never alerted. Needs a retry queue, dead-letter store, or at
+      minimum an alert. Explicitly out of scope of that fix; see `CHANGELOG.md` 2026-08-19.
 
 ### Authentication
 

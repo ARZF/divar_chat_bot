@@ -4,6 +4,64 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-08-19 (supplier-message timeout + exception-type fix)** — Closed the two defects
+  behind the production incident where a single buyer message spent **~4 minutes** in
+  `send_supplier_message` retries and then surfaced as Starlette's bare
+  `ERROR: Exception in ASGI application` instead of our structured logs. Both causes were
+  confirmed by reading the source, not inferred from logs.
+
+  **Root cause 1 — shared client had a flat 60s timeout.** `main.py`'s lifespan built
+  `httpx.AsyncClient(timeout=60)`, and `httpx` applies a bare number to **all four** phases
+  (connect/read/write/pool). No call site in `services/divar.py` overrides it per request,
+  so every one of `send_supplier_message`'s 4 attempts inherited a 60s ceiling —
+  4 × 60s + backoff ≈ 4 minutes for a connect-timeout cycle.
+
+  **Root cause 2 — `handle_post_bot_reply` caught the wrong exception type.**
+  `services/post_conversation.py` caught only `httpx.HTTPStatusError`, but
+  `send_supplier_message` re-raises the **original** exception after exhausting retries.
+  For a transport failure that is `httpx.ConnectTimeout` (or the other members of
+  `RETRYABLE_EXCEPTIONS`: `NetworkError`/`ReadTimeout`/`RemoteProtocolError`), none of
+  which are `HTTPStatusError` — so it escaped the `BackgroundTask` entirely. The `except`
+  clause's assumption that supplier-message failures always arrive as an HTTP *status*
+  error was wrong for precisely the case `RETRYABLE_EXCEPTIONS` exists to handle.
+
+  **The fixes.** `DIVAR_CLIENT_CONNECT_TIMEOUT_SECONDS` (default **5.0**) and
+  `DIVAR_CLIENT_TOTAL_TIMEOUT_SECONDS` (default **15.0**) were added to `config.py` and
+  `.env.example`; the lifespan now builds `httpx.Timeout(TOTAL, connect=CONNECT)`. The
+  `except` widened to `httpx.HTTPError` — verified against the installed **httpx 0.28.1**
+  as the common base of `HTTPStatusError` *and* `RequestError`/`TransportError`, so it
+  covers both shapes — with `status_code` logged as `None` when there is no response, plus
+  the error string. Deliberately **not** `except Exception`: a bug in the
+  `generate_chatbot_reply` call earlier in the same function must still crash loudly.
+
+  **Retry budget after the change** (documented in a comment next to `MAX_RETRIES` in
+  `services/divar.py`, which previously said nothing about it): backoff is unchanged at
+  `(1 + 2 + 4) + 3 × jitter ≤ 7.75s`, so with `MAX_ATTEMPTS = 4` the worst case is
+  **≤ ~68s** (4 × 15s read) and **≤ ~28s** for the connect-timeout case (4 × 5s) — down
+  from ~4 minutes.
+
+  **Shared-client blast radius — verified, not assumed.** The same client is used by
+  `send_message`, `get_conversation`, `get_user`, `refresh_access_token` and
+  `register_event_subscription`; none override the timeout, so all five moved from 60s to
+  the new values. None are expected to have a slow TCP/TLS connect under normal operation,
+  and the `NEW_CHATBOT_MESSAGE` path (`services/chatbot_conversation.py` → `send_message`)
+  is covered by a test asserting the settings-derived timeout reaches the outgoing request.
+
+  **Tests.** Four added: two asserting the lifespan's client timeout is sourced from
+  `settings` (one inspecting the constructed `httpx.Timeout`, one end-to-end via a settings
+  override on a real outgoing request), and two on `handle_post_bot_reply` covering the
+  `ConnectTimeout` branch (nothing propagates, one ERROR with `client_id`/`conversation_id`/
+  `status_code: None`, `rollback()` called) and the `HTTPStatusError` branch as a regression
+  guard (real status code preserved, `rollback()` still called). Mutation-checked: all three
+  behavioral tests fail against the pre-fix code, with `ConnectTimeout` escaping exactly as
+  in production. Suite **179 → 183 passed**.
+
+  **Known gap, explicitly out of scope.** A message that exhausts all 4 attempts is now
+  logged with full context, but there is still **no redelivery or dead-letter mechanism** —
+  the buyer gets no reply and the seller gets no alert. Recorded under
+  `CHECKLISTS.md` → Future Improvements. Also untouched: `_refresh_supplier_token`, and
+  the intermittent Divar TLS-handshake timeout itself (external network condition).
+
 - **2026-08-19 (chatbot.py module split)** — Split the 714-line `services/chatbot.py` into
   four focused modules. **Pure internal reorganization: no behavior, signature, log message,
   or SQL change.** Every function was moved verbatim.
