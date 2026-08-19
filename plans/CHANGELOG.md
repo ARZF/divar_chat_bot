@@ -4,6 +4,65 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-08-20 (advisor-plans archived and removed)** — Deleted the `advisor-plans/`
+  directory (7 plans + its `README.md`). These were **advisor-authored improvement
+  plans**, deliberately kept separate from this project's own phased plan in `plans/`;
+  all 7 have now been executed and marked DONE, so the directory carried no remaining
+  work and its summaries are preserved here instead.
+
+  - **001 — Declare test/dev dependencies and add a one-command test runner.** The
+    suite existed but had no reproducible way to install or run it: `requirements.txt`
+    listed production deps only, and every test file repeated ~12 inline
+    `os.environ.setdefault` lines. Added a test-dep section plus root `pytest.ini`
+    (`asyncio_mode = auto`) and `conftest.py` holding the shared env defaults.
+    **DONE** (2026-07-28), with higher pins than planned (`pytest==9.1.1`,
+    `pytest-asyncio==1.4.0`, `pytest-mock==3.15.1`, `aiosqlite==0.20.0`) which also
+    killed ~5000 `get_event_loop_policy` DeprecationWarnings.
+  - **002 — Fix CORS wildcard origin combined with credentials.** `main.py` used
+    `allow_origins=["*"]` together with `allow_credentials=True`; the CORS spec forbids
+    this and Starlette responds by reflecting the request `Origin`, so any site could
+    drive credentialed requests against the seller auth API (which sets an HTTP-only
+    refresh-token cookie). Replaced with a configurable `CORS_ALLOWED_ORIGINS: List[str]`
+    setting in `config.py`, defaulting to `[]` (no cross-origin browser access).
+    **DONE**.
+  - **003 — Remove resolution debug/fallback scaffolding.** A leftover
+    `logger.warning("RESOLVE DEBUG", ...)` fired at WARNING level on the hot
+    `_resolve_new_conversation` path, dumping `user_text` and config on every
+    unresolved message. With maintainer approval the scope was **expanded** beyond the
+    log: the undocumented `EXPERIMENTAL_CLIENT_ID` bypass, its operational warning, its
+    `config.py` setting, and its `.env.example` entry were all removed too, after real
+    `Client`/`Post` fixtures and `/start MY_POST`/`DEMAND_POST` resolution tests were
+    added first. **DONE — expanded and subsumed by the §2.1 hardening.**
+  - **004 — Guard background-task send failures in `handle_bot_reply`.**
+    `send_message` re-raises on non-2xx, and `handle_bot_reply` runs in a FastAPI
+    `BackgroundTask` after the webhook already returned 200, so a transient Divar error
+    only surfaced as an unhandled background-task exception — and worse, a failed
+    *welcome* send (which ran between the state write and the commit) aborted both the
+    substantive reply and the state transition. Added `_safe_send` and moved the welcome
+    to after `db.commit()`. **DONE** — retargeted to `services/chatbot_conversation.py`
+    because the 2026-08-19 module split moved `handle_bot_reply` out of
+    `services/chatbot.py`.
+  - **005 — Remove the dead `admin_token` setting.** After §2.7 moved seller endpoints
+    to JWT `get_current_client_id()`, no source read `settings.admin_token`; it survived
+    only as a *required* `Settings` field plus the test boilerplate that existed solely
+    to satisfy it at import time. Removed from `config.py` and from the test env setup,
+    as `plans/CHECKLISTS.md` had already called for. **DONE**.
+  - **006 — Add a committed `.env.example` template.** A `.env` is required at startup
+    (several required, no-default settings, some secret), but the only way to discover
+    the variable list was to read `config.py`. Added a placeholder-only `.env.example`
+    plus a `!.env.example` negation in `.gitignore` (needed because `.env.*` was
+    ignored). No real secrets, no runtime impact. **DONE**.
+  - **007 — Add test coverage for the chatbot intent router.** `services/chatbot.py` was
+    the core product logic — it decides what the bot says to every customer — yet no test
+    referenced it. Added `tests/test_chatbot.py` covering `parse_start_message`,
+    `_match_intent`, `_is_pure_greeting`, `_extract_product_name`, and the price-reply
+    branches, seeding the price cache the way `tests/test_price_lookup.py` does.
+    **DONE**; the plan text ended up stale on one point — `_handle_price_intent` is now
+    async with signature `(db, client_id, text)`.
+
+  The full text of each plan remains recoverable from `git log` / commit history at its
+  former path, `advisor-plans/00X-*.md` (e.g.
+  `git show HEAD~1:advisor-plans/004-guard-background-send-failures.md`).
 - **2026-08-19 (supplier-message timeout + exception-type fix)** — Closed the two defects
   behind the production incident where a single buyer message spent **~4 minutes** in
   `send_supplier_message` retries and then surfaced as Starlette's bare
