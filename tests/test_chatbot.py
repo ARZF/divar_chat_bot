@@ -27,6 +27,9 @@ from models.post_message import PostMessage, PostSenderType
 from models.enums import PostConversationState
 from models.product import Product
 import services.chatbot as chatbot
+import services.chatbot_conversation as chatbot_conversation
+import services.oauth_refresh as oauth_refresh
+import services.post_conversation as post_conversation
 import services.price_lookup as pl
 from services.price_lookup import normalize_text
 from services.state_machine import INTENT_EVENTS, ConversationState, transition
@@ -110,13 +113,26 @@ async def seeded_post(db):
     return client, post
 
 
+def _patch_session_local(monkeypatch, factory):
+    """Point every module that opens its own session at *factory*.
+
+    All three import AsyncSessionLocal independently, so all three need
+    patching — an unpatched one would open a real production session.
+    """
+    for module in (chatbot_conversation, post_conversation, oauth_refresh):
+        monkeypatch.setattr(module, "AsyncSessionLocal", factory)
+
+
 @pytest.fixture
 def sqlite_upsert(monkeypatch):
-    monkeypatch.setattr(
-        chatbot,
-        "pg_insert",
-        lambda model: _SQLiteInsertAdapter(model),
-    )
+    # Both orchestration modules import pg_insert independently, so both need
+    # patching — this is not redundant, do not collapse it to one call.
+    for module in (chatbot_conversation, post_conversation):
+        monkeypatch.setattr(
+            module,
+            "pg_insert",
+            lambda model: _SQLiteInsertAdapter(model),
+        )
 
 
 @pytest.fixture
@@ -454,11 +470,11 @@ async def test_handle_bot_reply_opens_its_own_session(
     """
     client, post = seeded_post
 
-    # chatbot.py does `from db.session import AsyncSessionLocal`, so the name
-    # must be patched on the chatbot module, not on db.session.
+    # handle_bot_reply's module does `from db.session import AsyncSessionLocal`,
+    # so the name must be patched on that module, not on db.session.
     tracked_context = _TrackedSessionContext(session_factory)
     mock_session_local = MagicMock(return_value=tracked_context)
-    monkeypatch.setattr(chatbot, "AsyncSessionLocal", mock_session_local)
+    _patch_session_local(monkeypatch, mock_session_local)
 
     send_message = AsyncMock(return_value=True)
     monkeypatch.setattr(chatbot.divar_service, "send_message", send_message)
@@ -505,7 +521,7 @@ async def test_handle_post_bot_reply_persists_buyer_and_bot_messages(
         )
         await db.commit()
 
-    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    _patch_session_local(monkeypatch, lambda: session_factory())
     send = AsyncMock()
     monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", send)
 
@@ -552,7 +568,7 @@ async def test_handle_post_bot_reply_price_uses_generated_reply(
             token_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
         ))
         await db.commit()
-    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    _patch_session_local(monkeypatch, lambda: session_factory())
     send = AsyncMock()
     monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", send)
 
@@ -569,8 +585,8 @@ async def test_handle_post_bot_reply_price_uses_generated_reply(
 async def test_handle_post_bot_reply_none_reply_persists_buyer_and_stays_new(
     monkeypatch, session_factory, seeded_post, sqlite_upsert
 ):
-    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
-    monkeypatch.setattr(chatbot, "generate_chatbot_reply", AsyncMock(return_value=None))
+    _patch_session_local(monkeypatch, lambda: session_factory())
+    monkeypatch.setattr(post_conversation, "generate_chatbot_reply", AsyncMock(return_value=None))
     send = AsyncMock()
     monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", send)
 
@@ -607,7 +623,7 @@ async def test_handle_post_bot_reply_deduplicates_redelivery(
             token_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
         ))
         await db.commit()
-    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    _patch_session_local(monkeypatch, lambda: session_factory())
     send = AsyncMock()
     monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", send)
 
@@ -634,9 +650,9 @@ async def test_handle_post_bot_reply_loads_history_and_isolates_conversations(
             token_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
         ))
         await db.commit()
-    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    _patch_session_local(monkeypatch, lambda: session_factory())
     generate = AsyncMock(return_value="generated reply")
-    monkeypatch.setattr(chatbot, "generate_chatbot_reply", generate)
+    monkeypatch.setattr(post_conversation, "generate_chatbot_reply", generate)
     monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", AsyncMock())
 
     await chatbot.handle_post_bot_reply("conversation-a", post.post_token, "first", "m1")
@@ -655,7 +671,7 @@ async def test_handle_post_bot_reply_loads_history_and_isolates_conversations(
 async def test_handle_post_bot_reply_unknown_post_does_not_send(
     monkeypatch, session_factory, sqlite_upsert, caplog
 ):
-    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    _patch_session_local(monkeypatch, lambda: session_factory())
     send = AsyncMock()
     monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", send)
     with caplog.at_level(logging.WARNING, logger="chatbot"):
@@ -668,7 +684,7 @@ async def test_handle_post_bot_reply_unknown_post_does_not_send(
 async def test_handle_post_bot_reply_missing_oauth_token_does_not_send(
     monkeypatch, session_factory, seeded_post, sqlite_upsert
 ):
-    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    _patch_session_local(monkeypatch, lambda: session_factory())
     send = AsyncMock()
     monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", send)
     await chatbot.handle_post_bot_reply(
@@ -692,7 +708,7 @@ async def test_handle_post_bot_reply_refreshes_token_and_reregisters(
             token_expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
         ))
         await db.commit()
-    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    _patch_session_local(monkeypatch, lambda: session_factory())
     refresh = AsyncMock(return_value=("new-access", "new-refresh", 37))
     register = AsyncMock()
     send = AsyncMock()
@@ -722,7 +738,7 @@ async def test_handle_post_bot_reply_send_failure_does_not_persist_bot_message(
         await db.commit()
     response = httpx.Response(502, request=httpx.Request("POST", "https://example.com"))
     error = httpx.HTTPStatusError("send failed", request=response.request, response=response)
-    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    _patch_session_local(monkeypatch, lambda: session_factory())
     monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", AsyncMock(side_effect=error))
 
     await chatbot.handle_post_bot_reply("supplier-conversation", post.post_token, "hello", "m1")
@@ -752,7 +768,7 @@ async def test_handle_post_bot_reply_refuses_cross_client_conversation(
             token_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
         ))
         await db.commit()
-    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    _patch_session_local(monkeypatch, lambda: session_factory())
     send = AsyncMock()
     monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", send)
 
@@ -768,7 +784,7 @@ async def test_handle_post_bot_reply_sets_context_and_uses_own_session(
     client, post = seeded_post
     tracked = _TrackedSessionContext(session_factory)
     factory = MagicMock(return_value=tracked)
-    monkeypatch.setattr(chatbot, "AsyncSessionLocal", factory)
+    _patch_session_local(monkeypatch, factory)
     monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", AsyncMock())
     async with session_factory() as db:
         db.add(OAuthToken(
@@ -848,7 +864,7 @@ async def bot(monkeypatch, session_factory):
     call (the _TrackedSessionContext mock is single-entry and cannot serve a
     multi-message conversation).
     """
-    monkeypatch.setattr(chatbot, "AsyncSessionLocal", lambda: session_factory())
+    _patch_session_local(monkeypatch, lambda: session_factory())
     send_message = AsyncMock(return_value=True)
     monkeypatch.setattr(chatbot.divar_service, "send_message", send_message)
 
@@ -968,7 +984,7 @@ async def test_redelivered_start_does_not_rewelcome_or_reset_state(
     await bot.say("خدمات")
     assert await bot.state() is ConversationState.SERVICE_MENU
 
-    monkeypatch.setattr(chatbot, "_lookup_conversation", AsyncMock(return_value=None))
+    monkeypatch.setattr(chatbot_conversation, "_lookup_conversation", AsyncMock(return_value=None))
     sent = await bot.say(start)
 
     # `sent` is cumulative across the conversation: exactly one welcome, ever.
@@ -998,7 +1014,7 @@ async def test_cross_client_conversation_id_collision_fails_safe(
 
     await bot.say(f"/start MY_POST {post_a.post_token}", conversation_id="conv-collide")
 
-    monkeypatch.setattr(chatbot, "_lookup_conversation", AsyncMock(return_value=None))
+    monkeypatch.setattr(chatbot_conversation, "_lookup_conversation", AsyncMock(return_value=None))
     with caplog.at_level(logging.ERROR, logger="chatbot"):
         sent = await bot.say(
             "/start MY_POST OTHER_TOKEN", conversation_id="conv-collide"
