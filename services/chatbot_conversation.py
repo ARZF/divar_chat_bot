@@ -202,6 +202,26 @@ def _state_of(conv: Conversation) -> ConversationState:
         return ConversationState.START
 
 
+async def _safe_send(conversation_id: str, text: str) -> bool:
+    """Send a message, logging and swallowing send failures.
+
+    handle_bot_reply runs in a FastAPI BackgroundTask after the webhook already
+    returned 200, so a raised send error would only surface as an unhandled
+    background-task exception. We log it and return False instead, so one failed
+    send (e.g. the welcome) never aborts a later, more important send (the reply)
+    or the state commit that precedes it.
+    """
+    try:
+        await divar_service.send_message(conversation_id, text)
+        return True
+    except Exception:
+        logger.exception(
+            "send_message failed in background task",
+            extra={"conversation_id": conversation_id},
+        )
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Main orchestrator — opens its own DB session (BackgroundTask-safe)
 # ---------------------------------------------------------------------------
@@ -234,9 +254,7 @@ async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
                     "unresolved conversation",
                     extra={"text": user_text},
                 )
-                await divar_service.send_message(
-                    conversation_id, settings.UNRESOLVED_CLIENT_MESSAGE
-                )
+                await _safe_send(conversation_id, settings.UNRESOLVED_CLIENT_MESSAGE)
                 return
             # is_new comes from whether the upsert actually inserted — NOT from
             # "the lookup above found nothing". Two redelivered webhooks can both
@@ -254,11 +272,11 @@ async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
         if client_id not in _cache:
             await refresh_lookup_cache(db, client_id)
 
-        # ---- 4. Welcome message + auto-advance on first-in-conversation ----
+        # ---- 4. Auto-advance on first-in-conversation ----
+        # In-memory only; the welcome send is deferred until after the commit
+        # (see step 6) so a failed send cannot abort the state transition or
+        # the substantive reply.
         if is_new:
-            await divar_service.send_message(
-                conversation_id, settings.WELCOME_MESSAGE
-            )
             # Fires unconditionally on first contact — no keyword needed.
             conv.current_state = transition(_state_of(conv), "menu").value
 
@@ -279,13 +297,17 @@ async def handle_bot_reply(conversation_id: str, user_text: str) -> None:
             reply = None
 
         # ---- 6. Persist state, then send ----
-        # One transaction for the whole webhook (2.6). Committed BEFORE the send
+        # One transaction for the whole webhook (2.6). Committed BEFORE the sends
         # because send_message re-raises on non-2xx: a transient Divar failure
-        # should cost the outbound message, never the state.
+        # should cost the outbound message, never the state. Both sends go
+        # through _safe_send, so a failed welcome cannot suppress the reply.
         await db.commit()
+
+        if is_new:
+            await _safe_send(conversation_id, settings.WELCOME_MESSAGE)
 
         if reply is None:
             return
 
-        await divar_service.send_message(conversation_id, reply)
+        await _safe_send(conversation_id, reply)
         logger.info("reply sent", extra={"text": reply})
