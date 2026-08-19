@@ -225,11 +225,23 @@ async def handle_post_bot_reply(
             await divar_service.send_supplier_message(
                 conversation_id, reply, access_token
             )
-        except httpx.HTTPStatusError as exc:
+        except httpx.HTTPError as exc:
+            # send_supplier_message re-raises the *original* exception after exhausting
+            # retries, so this must cover both shapes it can surface: HTTPStatusError for
+            # status failures, and the transport errors in divar.RETRYABLE_EXCEPTIONS
+            # (ConnectTimeout/NetworkError/ReadTimeout/RemoteProtocolError) for network
+            # exhaustion. httpx.HTTPError is the common base of both. Deliberately not
+            # `except Exception` — a bug in generate_chatbot_reply above must still crash.
+            status_code = (
+                exc.response.status_code
+                if isinstance(exc, httpx.HTTPStatusError)
+                else None
+            )
             logger.error(
                 "supplier message send failed",
                 extra={
-                    "status_code": exc.response.status_code,
+                    "status_code": status_code,
+                    "error": str(exc),
                     "client_id": client_id,
                     "conversation_id": conversation_id,
                 },
