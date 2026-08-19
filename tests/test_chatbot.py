@@ -447,6 +447,33 @@ class _TrackedSessionContext:
         return await self._context.__aexit__(*exc_info)
 
 
+class _RollbackSpySessionContext:
+    """Like _TrackedSessionContext, but counts rollback() on the yielded session.
+
+    Needed because handle_post_bot_reply's failure branches must roll back the buyer
+    message insert — an assertion on the absence of rows alone cannot distinguish a
+    rollback from a session that simply was never committed.
+    """
+
+    def __init__(self, factory):
+        self._context = factory()
+        self.rollback_calls = 0
+
+    async def __aenter__(self):
+        session = await self._context.__aenter__()
+        real_rollback = session.rollback
+
+        async def counting_rollback():
+            self.rollback_calls += 1
+            return await real_rollback()
+
+        session.rollback = counting_rollback
+        return session
+
+    async def __aexit__(self, *exc_info):
+        return await self._context.__aexit__(*exc_info)
+
+
 def test_handle_bot_reply_takes_no_session_parameter():
     """Guard: the Phase 1 signature must stay (conversation_id, user_text).
 
@@ -729,12 +756,14 @@ async def test_handle_post_bot_reply_send_failure_does_not_persist_bot_message(
 ):
     client, post = seeded_post
     async with session_factory() as db:
-        db.add(OAuthToken(
-            client_id=client.id,
-            divar_access_token="access-token",
-            divar_refresh_token="refresh-token",
-            token_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
-        ))
+        db.add(
+            OAuthToken(
+                client_id=client.id,
+                divar_access_token="access-token",
+                divar_refresh_token="refresh-token",
+                token_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+            )
+        )
         await db.commit()
     response = httpx.Response(502, request=httpx.Request("POST", "https://example.com"))
     error = httpx.HTTPStatusError("send failed", request=response.request, response=response)
@@ -745,6 +774,97 @@ async def test_handle_post_bot_reply_send_failure_does_not_persist_bot_message(
 
     async with session_factory() as db:
         assert not (await db.execute(select(PostMessage))).scalars().all()
+
+
+@pytest.mark.asyncio
+async def test_handle_post_bot_reply_swallows_and_logs_transport_error(
+    monkeypatch, session_factory, seeded_post, sqlite_upsert, caplog
+):
+    """A ConnectTimeout that survived all of send_supplier_message's retries must not
+    escape into the BackgroundTask — it used to, because only HTTPStatusError was caught,
+    and Starlette logged it as a bare "Exception in ASGI application".
+    """
+    client, post = seeded_post
+    async with session_factory() as db:
+        db.add(OAuthToken(
+            client_id=client.id,
+            divar_access_token="access-token",
+            divar_refresh_token="refresh-token",
+            token_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        ))
+        await db.commit()
+    tracked = _RollbackSpySessionContext(session_factory)
+    _patch_session_local(monkeypatch, MagicMock(return_value=tracked))
+    error = httpx.ConnectTimeout(
+        "timed out", request=httpx.Request("POST", "https://example.com")
+    )
+    monkeypatch.setattr(
+        chatbot.divar_service, "send_supplier_message", AsyncMock(side_effect=error)
+    )
+
+    with caplog.at_level(logging.ERROR, logger="chatbot"):
+        # No pytest.raises: the point of the test is that nothing propagates.
+        await chatbot.handle_post_bot_reply(
+            "supplier-conversation", post.post_token, "hello", "m1"
+        )
+
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "supplier message send failed"
+    )
+    assert record.status_code is None      # no response exists on a transport error
+    # str() on both sides: whether logging_config.ContextFilter is installed (it
+    # overwrites client_id from the contextvar, as a str) depends on whether another
+    # test has called setup_logging, so the raw type here is not order-independent.
+    assert str(record.client_id) == str(client.id)
+    assert record.conversation_id == "supplier-conversation"
+    assert "timed out" in record.error
+    assert tracked.rollback_calls == 1
+    async with session_factory() as db:
+        assert not (await db.execute(select(PostMessage))).scalars().all()
+
+
+@pytest.mark.asyncio
+async def test_handle_post_bot_reply_logs_real_status_code_on_status_error(
+    monkeypatch, session_factory, seeded_post, sqlite_upsert, caplog
+):
+    """Regression guard for the pre-existing branch: widening the except clause to
+    httpx.HTTPError must not lose the real status code or the rollback.
+    """
+    client, post = seeded_post
+    async with session_factory() as db:
+        db.add(OAuthToken(
+            client_id=client.id,
+            divar_access_token="access-token",
+            divar_refresh_token="refresh-token",
+            token_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        ))
+        await db.commit()
+    tracked = _RollbackSpySessionContext(session_factory)
+    _patch_session_local(monkeypatch, MagicMock(return_value=tracked))
+    response = httpx.Response(502, request=httpx.Request("POST", "https://example.com"))
+    error = httpx.HTTPStatusError(
+        "send failed", request=response.request, response=response
+    )
+    monkeypatch.setattr(
+        chatbot.divar_service, "send_supplier_message", AsyncMock(side_effect=error)
+    )
+
+    with caplog.at_level(logging.ERROR, logger="chatbot"):
+        await chatbot.handle_post_bot_reply(
+            "supplier-conversation", post.post_token, "hello", "m1"
+        )
+
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "supplier message send failed"
+    )
+    assert record.status_code == 502
+    assert str(record.client_id) == str(client.id)   # see note in the test above
+    assert record.conversation_id == "supplier-conversation"
+    assert tracked.rollback_calls == 1
 
 
 @pytest.mark.asyncio
