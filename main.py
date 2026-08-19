@@ -53,7 +53,18 @@ async def _warm_price_caches() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
-    divar_service.client = httpx.AsyncClient(timeout=60)
+    # One client shared by every function in services/divar.py. The connect timeout is
+    # deliberately much tighter than the total: no Divar endpoint we call is expected to
+    # have a slow TCP/TLS connect under normal operation, while a slow *response* is
+    # plausible. Verified against send_message, get_conversation, get_user,
+    # refresh_access_token and register_event_subscription — none override the timeout
+    # per request, so all five inherit these values.
+    divar_service.client = httpx.AsyncClient(
+        timeout=httpx.Timeout(
+            settings.DIVAR_CLIENT_TOTAL_TIMEOUT_SECONDS,
+            connect=settings.DIVAR_CLIENT_CONNECT_TIMEOUT_SECONDS,
+        )
+    )
     await _warm_price_caches()
     yield
     await divar_service.client.aclose()

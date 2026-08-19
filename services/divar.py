@@ -33,6 +33,16 @@ MAX_RETRIES = 3
 MAX_ATTEMPTS = MAX_RETRIES + 1
 RETRY_BACKOFF_BASE = 1.0
 RETRY_JITTER_MAX = 0.25
+# Worst-case wall-clock budget for one send_supplier_message call, with the shared
+# client's DIVAR_CLIENT_CONNECT_TIMEOUT_SECONDS=5 / DIVAR_CLIENT_TOTAL_TIMEOUT_SECONDS=15
+# defaults (main.py builds the httpx.Timeout; httpx applies it per phase, not as a total):
+#   backoff  = delay(0) + delay(1) + delay(2) = (1 + 2 + 4) + 3 × jitter ≤ 7.75s
+#   attempts = 4 × 15s if every attempt hangs waiting to read a response  = 60s
+#   → ≤ ~68s worst case; ≤ ~28s for the connect-timeout case (4 × 5s + backoff).
+# Before the 2026-08-19 fix the client used a flat 60s for all four phases, so a
+# connect-timeout cycle cost 4 × 60s + backoff ≈ 4 minutes — the observed incident.
+# Raising MAX_RETRIES or either timeout multiplies this; keep it well under whatever
+# window the caller (a BackgroundTask) is expected to finish in.
 
 
 def _api_key_headers() -> dict:

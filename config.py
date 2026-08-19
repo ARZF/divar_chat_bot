@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     DIVAR_REDIRECT_URI: str
     DATABASE_URL: str
 
+    # --- ⏱ Shared Divar HTTP client timeouts ---
+    # Applied to the single httpx.AsyncClient built in main.py's lifespan, so these
+    # bound *every* function in services/divar.py. Previously a hardcoded 60s across
+    # all four httpx phases, which let one send_supplier_message retry cycle run for
+    # ~4 minutes (see plans/CHANGELOG.md, 2026-08-19 incident).
+    DIVAR_CLIENT_CONNECT_TIMEOUT_SECONDS: float = 5.0
+    DIVAR_CLIENT_TOTAL_TIMEOUT_SECONDS: float = 15.0
+
     CORS_ALLOWED_ORIGINS: List[str] = []
 
     # --- 🔐 Seller Authentication (section 2.8) ---
