@@ -74,6 +74,16 @@ import ...` not `from app.services.divar import ...`).
   > `DIVAR_REFRESH_TOKEN` are now unused by source code (see CHECKLISTS.md Config Cleanup).
 
 ### `services/chatbot.py` — EXISTS
+> **Status 2026-08-19: now a backward-compatible re-export shim, not the primary
+> implementation.** The 714-line module was split along its five responsibilities into
+> `services/chatbot_engine.py` (shared reply engine), `services/chatbot_conversation.py`
+> (BOT-conversation orchestration), `services/post_conversation.py` (POST-conversation
+> orchestration) and `services/oauth_refresh.py` (seller token refresh). `chatbot.py` now
+> contains only a docstring and re-exports so `api/webhook.py` keeps importing
+> `handle_bot_reply`/`handle_post_bot_reply` unchanged. Pure reorganization — no behavior
+> change; see `CHANGELOG.md` 2026-08-19. **Read the new modules, not this shim, when
+> changing chatbot logic**, and note that patching a name on the shim does not affect the
+> moved functions (see the changelog entry for why).
 - Contains `handle_bot_reply(conversation_id, user_text)` — main orchestrator.
   **Updated (2026-07-04):** `client_id` parameter removed — it was never used for any
   business logic. Per Kenar documentation, the webhook payload contains no client/seller
@@ -198,7 +208,11 @@ app/
 ├── services/
 │   ├── divar.py          # Phase 1, reworked in Phase 2 (header split, get_user)
 │   ├── price_lookup.py   # Phase 1, reworked in Phase 2 (per-client cache)
-│   ├── chatbot.py        # Phase 1, reworked in Phase 2 (uses client_id)
+│   ├── chatbot.py        # Backward-compatible re-export shim only — NOT the implementation
+│   ├── chatbot_engine.py       # Shared reply engine: intent match, generate_chatbot_reply
+│   ├── chatbot_conversation.py # BOT-conversation (NEW_CHATBOT_MESSAGE) orchestration
+│   ├── post_conversation.py    # POST-conversation (NEW_MESSAGE) orchestration
+│   ├── oauth_refresh.py        # Seller OAuth token refresh
 │   ├── state_machine.py  # Phase 2 (2.6) — ConversationState, TRANSITIONS, INTENT_EVENTS
 │   └── ai.py             # Phase 4 only — do not create earlier
 ├── schemas/

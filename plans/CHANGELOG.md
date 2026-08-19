@@ -4,6 +4,55 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-08-19 (chatbot.py module split)** — Split the 714-line `services/chatbot.py` into
+  four focused modules. **Pure internal reorganization: no behavior, signature, log message,
+  or SQL change.** Every function was moved verbatim.
+
+  **What moved where.**
+  - `services/chatbot_engine.py` (145 lines) — the shared reply engine both orchestrators
+    call: `_match_intent`, `_is_pure_greeting`, `_extract_product_name`,
+    `_handle_price_intent`, `generate_chatbot_reply`.
+  - `services/chatbot_conversation.py` (291 lines) — BOT-conversation
+    (`NEW_CHATBOT_MESSAGE`) orchestration: `TOUCHPOINT_NAMES`, `parse_start_message`,
+    `_lookup_conversation`, `_resolve_new_conversation`, `_state_of`, `handle_bot_reply`.
+  - `services/post_conversation.py` (253 lines) — POST-conversation (`NEW_MESSAGE`)
+    orchestration: `_resolve_post_conversation`, `_load_post_message_history`,
+    `handle_post_bot_reply`.
+  - `services/oauth_refresh.py` (84 lines) — `_refresh_supplier_token`.
+
+  **Dependency direction.** Both orchestrators depend on `chatbot_engine`; `chatbot_engine`
+  depends on neither, and the two orchestrators never import each other. This is the same
+  one-directional rule as the services → models discipline behind the `ConversationState`
+  move (see 2026-08-16 below). Verified by AST inspection, not just by reading.
+
+  **The re-export shim.** `services/chatbot.py` (36 lines) was kept, reduced to a docstring
+  plus re-exports of all 14 previously-public-and-private names, so `api/webhook.py` keeps
+  importing `handle_bot_reply`/`handle_post_bot_reply` from `services.chatbot` unchanged.
+  The split is therefore mechanical from every caller's point of view.
+
+  **Caveat the shim does NOT cover — important for future test authors.** A
+  `from X import y` re-export binds a *value*, not a live alias, and a moved function
+  resolves its globals against its own module. So `monkeypatch.setattr(chatbot, "name", ...)`
+  silently becomes a **no-op** for the relocated implementations: the attribute is rebound on
+  the shim while the real call site keeps using the original. `tests/test_chatbot.py`
+  patched four such names, so those patches were retargeted onto the owning modules
+  (`pg_insert` and `AsyncSessionLocal` now have to be patched in *every* module that imports
+  them — two and three modules respectively; helper `_patch_session_local` and the
+  `sqlite_upsert` fixture do this, and both carry a comment saying why it is not redundant).
+  Only patch *targets* changed — no assertion, fixture logic, or test structure was touched.
+  Confirmed load-bearing by a mutation check: pointing those patches back at the shim
+  produces 12 failures + 9 errors, so they are genuinely in effect rather than passing
+  vacuously. Suite is **179 passed before and after**, identical.
+
+  `chatbot.divar_service` is deliberately re-exported as a *module object* rather than a
+  value — patching an attribute on it mutates the one shared `services.divar` module, so
+  the many existing `monkeypatch.setattr(chatbot.divar_service, ...)` calls still work.
+
+  **Deliberately not done.** Callers were not migrated off the shim, and `PLAN.md`'s Active
+  Phase / `STATUS.md`'s completion claims were untouched — this was a file-organization
+  change, not a phase-scope change. Retiring the shim by repointing `api/webhook.py` and
+  `tests/test_chatbot.py` at the new modules directly remains available as a follow-up.
+
 - **2026-08-16 (`sent_at` type correction)** — Closed the **`sent_at` type mismatch**
   flagged as a real finding inside `test_realistic_divar_webhook_payload`'s docstring.
 
