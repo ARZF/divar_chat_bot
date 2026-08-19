@@ -1163,3 +1163,97 @@ async def test_cross_client_conversation_id_collision_fails_safe(
             .all()
         )
     assert owners == [client_a.id]
+
+
+# ---------------------------------------------------------------------------
+# _safe_send: outbound sends must not escape as unhandled BackgroundTask errors
+#
+# handle_bot_reply runs after the webhook already returned 200, so a raised
+# send error is invisible to the caller. Patch targets are on
+# chatbot_conversation, not the chatbot shim: a `from X import y` re-export
+# binds a value, so patching a *function* on the shim would silently no-op.
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_safe_send_returns_false_and_logs_on_exception(monkeypatch, caplog):
+    monkeypatch.setattr(
+        chatbot_conversation.divar_service,
+        "send_message",
+        AsyncMock(side_effect=httpx.HTTPError("boom")),
+    )
+    # Called directly, so nothing has populated the logging contextvar. Set it to
+    # the same id: whether logging_config.ContextFilter is installed (it overwrites
+    # conversation_id from the contextvar) depends on whether another test called
+    # setup_logging, so this keeps the assertion below order-independent.
+    conversation_id_var.set("conv-safe")
+
+    with caplog.at_level(logging.ERROR, logger="chatbot"):
+        result = await chatbot_conversation._safe_send("conv-safe", "text")
+
+    assert result is False
+    failures = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(failures) == 1
+    assert failures[0].conversation_id == "conv-safe"
+    assert failures[0].exc_info is not None
+
+
+@pytest.mark.asyncio
+async def test_safe_send_returns_true_on_success(monkeypatch):
+    monkeypatch.setattr(
+        chatbot_conversation.divar_service,
+        "send_message",
+        AsyncMock(return_value=True),
+    )
+
+    assert await chatbot_conversation._safe_send("conv-safe", "text") is True
+
+
+@pytest.mark.asyncio
+async def test_welcome_send_failure_does_not_abort_reply_or_state(
+    bot, seeded_post, sqlite_upsert, catalog, caplog
+):
+    """A failed welcome must cost only the welcome.
+
+    Pre-fix the welcome was sent between the state write and the commit, so a
+    raised send aborted both the reply and the transition.
+    """
+    _, post = seeded_post
+    bot.sent.side_effect = [httpx.HTTPError("welcome failed"), True]
+
+    with caplog.at_level(logging.ERROR, logger="chatbot"):
+        sent = await bot.say(f"/start MY_POST {post.post_token}")
+
+    # Both sends were attempted, welcome first, in the same order as before.
+    assert sent == [settings.WELCOME_MESSAGE, settings.FALLBACK_MESSAGE]
+    # The transition was committed despite the failed welcome.
+    assert await bot.state() is ConversationState.MAIN_MENU
+    assert any(r.levelno >= logging.ERROR for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_reply_send_failure_does_not_raise_out_of_handle_bot_reply(
+    bot, seeded_post, sqlite_upsert, catalog, caplog
+):
+    _, post = seeded_post
+    await bot.say(f"/start MY_POST {post.post_token}")
+    bot.sent.side_effect = httpx.HTTPError("reply failed")
+
+    with caplog.at_level(logging.ERROR, logger="chatbot"):
+        sent = await bot.say("قیمت آیفون ۱۳")
+
+    assert sent[-1] == "قیمت iPhone 13: 35,000,000 تومان"
+    failures = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(failures) == 1
+    assert failures[0].conversation_id == "conv-state"
+    # The state still advanced — it was committed before the send.
+    assert await bot.state() is ConversationState.PRICE_MENU
+
+
+@pytest.mark.asyncio
+async def test_unresolved_send_failure_does_not_raise(monkeypatch, bot, caplog):
+    bot.sent.side_effect = httpx.HTTPError("unresolved failed")
+
+    with caplog.at_level(logging.ERROR, logger="chatbot"):
+        sent = await bot.say("/start MY_POST UNKNOWN_TOKEN")
+
+    assert sent == [settings.UNRESOLVED_CLIENT_MESSAGE]
+    assert any(r.levelno >= logging.ERROR for r in caplog.records)
