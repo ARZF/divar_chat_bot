@@ -1,4 +1,4 @@
-"""shrink post_token from varchar(255) to varchar(20)
+"""shrink post_token from varchar(255) to varchar(20); add is_available
 
 Revision ID: 0002
 Revises: 0001
@@ -26,9 +26,19 @@ def upgrade() -> None:
         type_=sa.String(length=20),
         existing_nullable=False,
     )
+    op.add_column(
+        "posts",
+        sa.Column(
+            "is_available",
+            sa.Boolean(),
+            nullable=False,
+            server_default="true",
+        ),
+    )
 
 
 def downgrade() -> None:
+    op.drop_column("posts", "is_available")
     op.alter_column(
         "posts",
         "post_token",
