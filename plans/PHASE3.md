@@ -349,6 +349,26 @@ Then redirect to:
 
 The server must invalidate the refresh token and clear the cookie.
 
+## 3.4.6 OAuth callback redirect (closes an existing TODO)
+
+`api/oauth.py`'s `/oauth/callback` currently returns the same JSON
+`{"access_token", "expires_in"}` contract as OTP login, with an inline
+comment marking it temporary pending a real seller-facing destination.
+
+Once `/dashboard` exists, `oauth_callback` must be changed to issue a
+`RedirectResponse` to the dashboard instead of returning raw JSON.
+
+The access token must NOT be passed in the redirect URL/query string in
+plaintext. Prefer one of:
+
+- setting a short-lived, HttpOnly, Secure session cookie the dashboard reads
+  server-side on first load, or
+- redirecting to an intermediate page that immediately exchanges a one-time
+  code for the access token via an existing authenticated endpoint
+
+Do not weaken the existing refresh-token-in-cookie-only guarantee to make
+this work.
+
 ---
 
 # 3.5 Seller Web Routes
@@ -538,7 +558,8 @@ its ID.
 ## 3.7.6 Excel import
 
 Expose the existing product/price import functionality through the dashboard.
-
+  Reuse `services.price_lookup.load_prices_to_db(db, client_id, df)` — do not
+  reimplement the transactional replace logic.
 Route:
 
     POST /api/v1/seller/products/import
@@ -648,6 +669,37 @@ Display:
 
 Unsupported actions must not be displayed as if they work.
 
+## 3.8.4 Listing availability
+
+The `posts.is_available` field (added in Phase 2) is the source of truth for
+whether a listing should be treated as available by the chatbot.
+
+Recommended:
+
+    PATCH /api/v1/seller/listings/{post_token}/availability
+
+Body:
+
+    { "is_available": true | false }
+
+Must be tenant-scoped: a seller may only toggle availability on a `post_token`
+that resolves to their own `client_id`. Follow the exact ownership pattern
+already used in `api/seller.py`'s `register_posts`.
+
+## 3.8.5 Listing images
+
+Before implementing, verify Divar's image upload API contract
+(`docs/post/get_media_upload_url_v2.md`) end-to-end from the dashboard —
+not from inside chatbot conversations. Uploading an image on behalf of a
+seller through the chatbot conversation itself is explicitly out of scope;
+this is a dashboard-only feature.
+
+Recommended:
+
+    POST /api/v1/seller/listings/{post_token}/images
+
+Must reuse Divar's existing upload-URL flow, not invent a new one.
+
 ---
 
 # 3.9 Conversations
@@ -661,6 +713,11 @@ The seller dashboard should expose read-only conversation information first.
 
 ## 3.9.1 Conversation API
 
+  Both conversation systems must be represented: the chatbot conversations
+  (`conversations`/`messages`) and the supplier-wide post conversations
+  (`post_conversations`/`post_messages`, per PHASE2.md §2.9). Do not surface
+  only one and treat it as complete.
+  
 Recommended:
 
     GET /api/v1/seller/conversations
@@ -796,6 +853,20 @@ Display:
 - usage
 - available plans
 - upgrade CTA
+
+## 3.10.6 Payment gateway — explicitly deferred, not to be inferred
+
+No payment gateway (Zarinpal, IDPay, Shaparak-based providers, etc.) has been
+selected. This is a business decision outside Phase 3's technical scope.
+
+Do NOT:
+- guess a gateway and wire up its SDK
+- implement a "generic" gateway abstraction speculatively
+- hardcode a specific provider's callback URL shape
+
+`POST /api/v1/seller/subscription/checkout` and `POST /api/v1/payments/callback`
+remain stubs (or unimplemented) until this decision is made explicitly by the
+maintainer.
 
 ---
 
@@ -1244,6 +1315,24 @@ Dashboard cards should use lightweight queries.
 ---
 
 # 3.24 Phase 3 Milestones
+
+## Recommended execution order (not strictly sequential per the list below)
+
+Given single-developer bandwidth, prioritize in this order:
+
+1. **3.1 Web Foundation** + **3.3 Authentication UI** + **3.4 Dashboard shell**
+   (no listings/subscriptions yet) — these unblock everything else and build
+   on infrastructure that already exists (JWT, OTP).
+2. **3.5 Product Management** — APIs mostly exist already
+   (`services/price_lookup.py`); this milestone is primarily UI + thin CRUD
+   wrappers.
+3. **3.6 Divar Listings** (including 3.8.4/3.8.5 above) — requires the Divar
+   API capability verification called out in 3.8.1 before any code is written.
+4. **3.8 Packages and Subscription** — requires the payment-gateway decision
+   (3.10.6) and is lowest priority for an MVP seller experience.
+
+This ordering is a recommendation, not a hard gate — but 3.8 (Packages) should
+not begin before the gateway decision exists, per 3.10.6.
 
 ## 3.1 Web Foundation
 
