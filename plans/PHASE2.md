@@ -1,4 +1,14 @@
-# Phase 2 — Multi-Tenant Conversation Management (Active)
+# Phase 2 — Multi-Tenant Conversation Management (DEFERRED — see note)
+
+> **STATUS (2026-08-22): Active Phase moved to Phase 3 before Phase 2 fully closed.**
+> §2.7 (admin rework), §2.8's SMS provider, and §2.9's one open item
+> (`/oauth/dev/start` scopes) are deliberately postponed, not abandoned. This
+> was a conscious build-order decision — Phase 3 (Seller Web Platform) does
+> not depend on any of these three items, and delivers more immediate value.
+> Return to this file and pick up the remaining `[ ]` boxes once Phase 3's
+> foundation work is stable. Do not silently complete these while working
+> elsewhere; if Phase 3 work reveals a hard dependency on one of them, flag it
+> explicitly rather than resolving it inline.
 
 > **Agent rule:** Do not begin Phase 2 tasks until `PLAN.md`'s Active Phase reads
 > `Phase 2`, and both Phase 1 bugfix tasks (1.B1, 1.B2) are checked off in `PHASE1.md`.

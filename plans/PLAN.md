@@ -23,8 +23,9 @@ This plan is split across files in `plans/`. **Only read what your task needs:**
 | `PLAN.md` (this file) | Always — tells you active phase + which file(s) to open next |
 | `REFERENCE.md` | You need existing-file notes, tech stack, or the project structure tree |
 | `PHASE1.md` | Your task references Phase 1 code/bugfixes, or you're touching Phase 1 files |
-| `PHASE2.md` | **Current active phase** — read the specific `## 2.X` section for your task |
-| `PHASE3.md`, `PHASE4.md` | Not started — do not read unless explicitly told to |
+| Phase 2 | **Deferred (not complete)** — 2.1–2.6, 2.9 (mostly) done. Open and postponed: §2.7 (admin rework), §2.8's SMS provider (OTP login code-path exists but not production-usable), §2.9's `/oauth/dev/start` scopes. Active phase moved to Phase 3 on 2026-08-22 — see PLAN.md. |
+| `PHASE3.md` | **Current active phase** — read the specific `## 3.X` section for your task |
+| `PHASE4.md`, `PHASE5.md` | Not started — do not read unless explicitly told to |
 | `CHECKLISTS.md` | Security Checklist, Pre-Production Checklist, Future Improvements |
 | `CHANGELOG.md` | A past decision seems relevant/contradictory to what you're building — spot-check, don't read cover-to-cover by default |
 | `STATUS.md` | Quick current-status table |
@@ -38,17 +39,16 @@ the split is to avoid reading the *entire* history for every task, not to hide i
 ## Active Phase
 
 > Set this manually before each coding session.
-> **Current: Phase 2** (Phase 1 complete including all bugfixes 1.B1, 1.B2, 1.B3.
-> Build order: ~~2.2~~ → 2.8 partial (OTP/SMS deferred; see `CHECKLISTS.md`) → ~~2.7~~ → ~~2.3~~ → (~~2.1~~ ∥ ~~2.4~~ ∥ ~~2.6~~) → ~~2.5~~ → 2.9 partial → 2.7 admin rework)
+> **Current: Phase 3** (Seller Web Platform)
 >
-> **For this phase, read `PHASE2.md`** — the `## 2.7` admin rework is next per build order.
-> §2.9 was built out on 2026-08-16 and is **substantially implemented but not complete**: the
-> `/oauth/dev/start` scopes remain open. The `refresh_access_token()` per-seller defect found
-> while auditing those commits is fixed, together with event re-registration on refresh; the
-> row lock added there is **unverified against PostgreSQL** (SQLite drops `FOR UPDATE`) — read
-> §2.9's resolved-defect note before touching that path.
-> `PHASE2.md`'s own intro references `REFERENCE.md` and `PHASE1.md` where
-> relevant — follow those pointers as needed, don't read them preemptively in full.
+> **Phase 2 deferred, not fully complete.** Remaining Phase 2 items are explicitly
+> postponed, not abandoned — see `PHASE2.md`'s own status note at the top of the
+> file for what's open (§2.7 admin rework, §2.8 SMS provider, §2.9's one open
+> item). Do not silently pick these up while working on Phase 3; if a Phase 3
+> task turns out to depend on one of them, stop and flag it rather than
+> resolving it inline.
+>
+> **For this phase, read `PHASE3.md`.**
 
 ---
 
