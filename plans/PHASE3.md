@@ -279,10 +279,32 @@ UI:
 
     Phone number
     [Send OTP]
+    [Login with Divar]
 
 JavaScript calls the existing OTP request endpoint.
 
 Do not create a new authentication endpoint solely for the HTML UI.
+
+### "Login with Divar" option (maintainer decision, 2026-08-23)
+
+Besides the OTP form, the login page MUST also offer a "Login with Divar"
+button so sellers can log in through the EXISTING seller OAuth flow instead
+of OTP:
+
+    Button links to:  GET /oauth/start
+    Completion via:   GET /oauth/callback  (see §3.4.6)
+
+Rules:
+
+- The button is a plain link/redirect to `/oauth/start`. Do NOT create a new
+  OAuth implementation, new endpoints, or a second state store.
+- Both login paths converge on the same session mechanics already defined in
+  `api/auth.py` (`find_or_create_client` merge-by-phone + `issue_session`);
+  the web layer adds UI only.
+- After the callback completes, the seller must land on the authenticated
+  web destination per §3.4.6 — the access token must never appear in the
+  redirect URL/query string.
+- Milestone 3.3 includes this button; it is not a separate phase or task.
 
 ## 3.4.2 OTP page
 
@@ -1374,6 +1396,7 @@ Acceptance:
 ## 3.3 Authentication UI
 
 - [ ] Login page
+- [ ] Login with Divar button on login page (§3.4.1)
 - [ ] OTP page
 - [ ] OTP request integration
 - [ ] OTP verification integration
