@@ -212,6 +212,589 @@ Prefer maintainable project-owned CSS over pulling a large UI framework into
 the application.
 
 ---
+## 3.2.4 Design System and Visual Direction
+
+Phase 3 is a seller-facing product, not a generic AI/SaaS dashboard.
+
+The visual design MUST feel like a real, mature marketplace management
+interface designed specifically for Divar sellers.
+
+The implementation must prioritize:
+
+- usability
+- clarity
+- information hierarchy
+- trust
+- Persian/RTL readability
+- fast scanning
+- practical seller workflows
+- consistency across pages
+
+The UI should feel **purpose-built**, not generated from a generic dashboard
+template.
+
+### Core Visual Direction
+
+The overall visual language should be:
+
+- Persian-first
+- RTL-first
+- practical
+- information-dense but not crowded
+- restrained
+- professional
+- marketplace-oriented
+- familiar to Iranian users
+- functional rather than decorative
+
+The interface should communicate that this is a tool for managing real
+products, listings, customers, conversations, and subscriptions.
+
+Prefer the visual language of established marketplace/admin products over
+modern startup landing-page aesthetics.
+
+### Anti-AI-Slop Rules
+
+The following patterns MUST NOT be used merely because they are common in
+AI-generated dashboard designs.
+
+Do NOT use:
+
+- excessive rounded cards
+- excessive `border-radius`
+- cards nested inside cards
+- gradient backgrounds
+- decorative gradient text
+- purple/blue "AI SaaS" visual palettes without a product-specific reason
+- glassmorphism
+- frosted-glass panels
+- excessive drop shadows
+- floating cards everywhere
+- excessive pill-shaped UI elements
+- decorative KPI cards for every metric
+- oversized dashboard headings
+- giant empty hero sections
+- decorative blobs or abstract background shapes
+- unnecessary illustrations
+- decorative charts without useful information
+- excessive use of icons
+- icons used instead of clear Persian labels
+- emoji as UI decoration
+- excessive animations
+- animated counters
+- excessive hover effects
+- unnecessary loading animations
+- generic "AI dashboard" visual patterns
+- excessive whitespace that reduces information density
+- fake complexity intended to make the product look more sophisticated
+- visual elements that do not serve a user task
+
+Do not attempt to make the application look "premium", "futuristic", or
+"AI-powered" through decoration.
+
+A simple, well-structured interface is preferred over a visually impressive
+but impractical one.
+
+### Cards
+
+Cards may be used when they create a meaningful visual grouping.
+
+Do not turn every piece of information into a card.
+
+Prefer:
+
+- simple sections
+- borders/dividers
+- table rows
+- grouped content
+- clear headings
+- restrained containers
+
+A card must have a clear semantic purpose.
+
+Bad:
+
+    card
+      card
+        card
+          metric
+
+Preferred:
+
+    section
+      heading
+      content
+
+Use stronger visual treatment only for genuinely important information such
+as the current subscription or a primary action.
+
+### Border Radius
+
+Use a restrained and consistent radius system.
+
+Do not make every element heavily rounded.
+
+In particular:
+
+- tables should remain visually rectangular
+- inputs should not look like capsules
+- primary actions should not automatically become pill buttons
+- navigation items should not all be large rounded pills
+
+Rounded corners should support hierarchy, not become the visual identity of
+the entire application.
+
+### Shadows
+
+Shadows should be subtle and used sparingly.
+
+Prefer borders and spacing to communicate hierarchy.
+
+Do not give every card, button, input, and navigation item its own shadow.
+
+### Color
+
+Use a small, coherent color system.
+
+Color should communicate meaning:
+
+- primary actions
+- success
+- warning
+- error
+- informational states
+- disabled states
+
+Do not use multiple unrelated accent colors simply to make the interface
+look visually rich.
+
+The interface should remain usable if decorative color is removed.
+
+Status colors must not be the only way information is communicated.
+
+### Typography
+
+Persian typography is a first-class design requirement.
+
+The selected font stack must provide good Persian glyphs, readable numbers,
+and clear distinction between:
+
+- headings
+- body text
+- labels
+- metadata
+- prices
+- timestamps
+- status information
+
+Do not use typography copied from a generic English SaaS dashboard without
+checking Persian rendering.
+
+Avoid excessive font-weight variation.
+
+Use typography and spacing to establish hierarchy before adding decorative
+elements.
+
+Prices, timestamps, counts, and identifiers should remain easy to scan.
+
+### Spacing
+
+Use a consistent spacing scale throughout the application.
+
+Do not randomly assign margins and padding per component.
+
+The layout should have enough whitespace to remain readable, but seller
+workflows should remain information-dense.
+
+In particular:
+
+- product tables should not have excessive vertical padding
+- conversation lists should allow many conversations to be scanned quickly
+- dashboard summaries should not consume most of the viewport
+- mobile layouts may reduce density where necessary
+
+### Icons
+
+Icons are optional and functional.
+
+Use an icon only when it improves recognition or interaction.
+
+Do not add an icon to every navigation item, button, heading, and statistic.
+
+Every important action must remain understandable without relying on an icon.
+
+Do not introduce a large icon library solely for visual decoration.
+
+If icons are needed, use a small consistent set rather than mixing multiple
+icon styles.
+
+---
+
+## Page-Specific Design Rules
+
+### Public Home Page
+
+The home page should communicate the product quickly.
+
+Prioritize:
+
+1. what the product does
+2. seller benefits
+3. how automation works
+4. important capabilities
+5. clear login/get-started action
+6. pricing entry point
+
+Do not create a generic startup landing page with:
+
+- enormous hero typography
+- multiple gradient sections
+- decorative blobs
+- fake customer logos
+- invented testimonials
+- invented statistics
+- meaningless feature cards
+- excessive scrolling
+
+Any claim, statistic, testimonial, customer count, or business metric must
+come from a real project requirement or verified source.
+
+The page should look like the public website of a real seller product, not an
+AI-generated SaaS template.
+
+### Pricing Page
+
+Pricing must optimize for comparison and decision-making.
+
+Prefer:
+
+- clear plan names
+- clear prices
+- billing period
+- important limits
+- concise feature comparison
+- obvious current/available state
+- one clear primary action per plan
+
+Avoid:
+
+- excessively decorative pricing cards
+- giant "MOST POPULAR" ribbons
+- gradients used only to highlight a plan
+- unnecessarily complex feature matrices
+- fake urgency
+- fake discounts
+- invented pricing claims
+
+Plans must come from the configured/domain data rather than being visually
+invented inside the template.
+
+### Login Page
+
+The login page should be extremely simple.
+
+Primary focus:
+
+- phone number
+- Send OTP
+- Login with Divar
+
+Do not add:
+
+- unnecessary marketing sections
+- decorative dashboards
+- complex illustrations
+- social login buttons that do not exist
+- unnecessary account creation flows
+
+Authentication UI should feel trustworthy and direct.
+
+### OTP Page
+
+The OTP page should minimize distraction.
+
+Focus on:
+
+- phone context
+- OTP input
+- verification action
+- retry
+- expiration/error state
+
+The page should clearly communicate what the seller needs to do next.
+
+Do not turn the OTP screen into a marketing page.
+
+### Dashboard
+
+The dashboard is a management workspace, not a showcase page.
+
+Prioritize:
+
+- current subscription
+- important counts
+- recent activity
+- actionable shortcuts
+- seller context
+
+Do not create a dashboard where every metric is represented by a large
+decorative card.
+
+Use a mixture of compact summaries, lists, and sections.
+
+The seller should be able to understand the state of their business quickly
+without scrolling through decorative content.
+
+### Products
+
+Products are a data-management workflow.
+
+The product page should prioritize the table/list over decorative cards.
+
+Important information includes:
+
+- product name
+- price
+- last update
+- actions
+
+Search, pagination, import, create, edit, and delete actions must be easy to
+find.
+
+Prefer a compact desktop table and a deliberately designed mobile
+representation.
+
+Do not convert every product into a large card on desktop merely because cards
+are easier to generate.
+
+### Listings
+
+Listings should visually resemble a marketplace/listing management interface.
+
+Important information includes:
+
+- listing identity/title
+- availability/status
+- price when available
+- synchronization information
+- supported actions
+- Divar link
+
+Do not display unsupported actions merely to make the UI appear complete.
+
+Do not invent listing metadata for visual completeness.
+
+### Conversations
+
+The conversation interface should prioritize scanning and reading.
+
+Prefer a layout conceptually similar to a real messaging/support workspace:
+
+- conversation list
+- selected conversation
+- message history
+- timestamps
+- current state/status
+
+Do not build a generic analytics dashboard around conversations.
+
+Do not introduce a WebSocket-style UI merely for visual effect; Phase 3
+explicitly allows normal request/response or polling.
+
+### Subscription
+
+Subscription information should be easy to understand.
+
+Prioritize:
+
+- current plan
+- status
+- expiration
+- usage
+- available plans
+- upgrade action
+
+Do not use decorative financial-dashboard patterns.
+
+Payment-related UI must not imply that a payment flow exists when it has not
+been implemented.
+
+### Settings
+
+Settings should be simple and form-oriented.
+
+Prefer:
+
+- clear sections
+- labels
+- values
+- explicit edit/save actions
+
+Do not turn settings into a visually elaborate profile page.
+
+Sensitive credentials and internal identifiers must never be surfaced merely
+to make the page appear more complete.
+
+---
+
+## Responsive Design
+
+Responsive behavior must be designed intentionally rather than achieved by
+simply stacking desktop elements vertically.
+
+### Desktop
+
+Desktop layouts should take advantage of available horizontal space.
+
+Examples:
+
+- persistent sidebar where appropriate
+- data tables
+- conversation split-view
+- multi-column dashboard sections
+
+### Tablet
+
+Reduce density while preserving important navigation and actions.
+
+### Mobile
+
+Mobile layouts should prioritize the primary workflow.
+
+Examples:
+
+- navigation may collapse
+- tables may transform into compact rows or structured cards where necessary
+- secondary information may move behind a detail view
+- actions must remain reachable
+- text must not become unnecessarily tiny
+
+Do not simply shrink desktop UI until it becomes difficult to use.
+
+---
+
+## Component Consistency
+
+Components must use a small, consistent visual vocabulary.
+
+At minimum, establish consistent styles for:
+
+- page headers
+- section headers
+- buttons
+- inputs
+- selects
+- text areas
+- tables
+- badges/status indicators
+- alerts/errors
+- empty states
+- loading states
+- pagination
+- navigation
+- modal/dialog patterns if required
+
+Do not create a visually different component style for every page.
+
+Do not create multiple button styles that have no semantic distinction.
+
+Do not create page-specific spacing systems.
+
+---
+
+## Empty, Loading, and Error States
+
+Every data-driven page should have deliberate states for:
+
+- loading
+- empty data
+- validation error
+- API error
+- unauthorized session
+- successful mutation where appropriate
+
+These states must be useful and concise.
+
+Do not use generic:
+
+    "Oops! Something went wrong."
+
+messages when a more useful Persian explanation can be provided.
+
+Do not fill empty states with decorative illustrations unless they provide
+real value.
+
+---
+
+## Design System Before Page Expansion
+
+Before implementing multiple Phase 3 pages, establish a small shared visual
+system in the global CSS.
+
+The system should define, at minimum:
+
+- typography
+- colors
+- spacing
+- borders
+- radius
+- shadows
+- buttons
+- form controls
+- tables
+- status indicators
+- layout containers
+- navigation
+- responsive breakpoints
+
+The system should remain small.
+
+Do NOT build a general-purpose frontend component framework inside vanilla
+JavaScript/CSS.
+
+The purpose of the design system is consistency, not abstraction for its own
+sake.
+
+---
+
+## Design Review Gate
+
+Before considering a frontend milestone complete, review the rendered UI
+against these questions:
+
+1. Does this look like a real marketplace seller product rather than a
+   generic AI-generated SaaS dashboard?
+
+2. Is every major visual element serving a real user task?
+
+3. Are there unnecessary cards, gradients, shadows, pills, icons, or
+   animations?
+
+4. Is the interface information-dense enough for a seller management
+   workflow?
+
+5. Is Persian typography readable?
+
+6. Is RTL behavior correct?
+
+7. Does the visual hierarchy work without decorative effects?
+
+8. Are tables, forms, conversations, and settings optimized for their actual
+   tasks?
+
+9. Does mobile behavior remain intentional and usable?
+
+10. Did the implementation introduce any visual pattern simply because it is
+    common in AI-generated dashboard designs?
+
+If the answer to the last question is yes, simplify it.
+
+### Design Principle
+
+> **Prefer product-specific clarity over generic visual impressiveness.**
+
+When choosing between a more decorative design and a simpler design that makes
+the seller workflow clearer, always choose the simpler design.
 
 # 3.3 Public Website
 
@@ -1606,6 +2189,11 @@ Agents implementing Phase 3 MUST follow these rules:
 20. Do not refactor unrelated Phase 1/Phase 2 code while implementing Phase 3
     unless the change is required for correctness, security, or integration.
 
+21. Follow §3.2.4 Design System and Anti-AI-Slop rules for all frontend
+    implementation. Do not introduce visual patterns that contradict the
+    defined product-specific design direction merely because they are common
+    in AI-generated SaaS interfaces.
+    
 ---
 
 # 3.27 Final Architecture
