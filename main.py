@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
 from config import settings
@@ -11,6 +12,7 @@ from api.oauth import router as oauth_router
 from api.admin import router as admin_router
 from api.auth import router as auth_router
 from api.seller import router as seller_router
+from api.web import STATIC_DIR, router as web_router
 
 from db.session import AsyncSessionLocal
 from logging_config import setup_logging
@@ -82,5 +84,10 @@ app.include_router(oauth_router)
 app.include_router(admin_router)
 app.include_router(auth_router)
 app.include_router(seller_router)
+app.include_router(web_router)
+
+# Mounted under a dedicated prefix so it can never shadow an API route. The
+# name="static" is what `url_for('static', path=...)` resolves in templates.
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 

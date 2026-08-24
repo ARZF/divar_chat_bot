@@ -1,0 +1,5 @@
+/* Static-serving probe (Phase 3 step 2). Replaced by the real global
+   stylesheet in the base-template step. No secrets belong in this file. */
+#probe {
+  font-family: system-ui, sans-serif;
+}
