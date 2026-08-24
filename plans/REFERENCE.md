@@ -26,8 +26,10 @@ import ...` not `from app.services.divar import ...`).
   is missing and must be added.
 
 ### `main.py` — EXISTS
-- Only imports `webhook_router` and `admin_router` for now (`api/oauth.py`'s router must also be mounted —
-  verify this is wired in; if not, add it as part of the Phase 1 bugfix pass)
+- Mounts every router via `app.include_router(...)`: `webhook_router`, `oauth_router`,
+  `admin_router`, `auth_router`, `seller_router`, and (Phase 3, step 2) `web_router`.
+- **Phase 3 (step 2):** mounts `StaticFiles(directory=STATIC_DIR)` at `/static` with
+  name `"static"`; `STATIC_DIR` is imported from `api/web.py`.
 - Sets up the single shared `httpx.AsyncClient` via `lifespan`
 
 ### `api/webhook.py` — EXISTS, updated for Phase 2 design
@@ -150,6 +152,38 @@ import ...` not `from app.services.divar import ...`).
   dependency direction services → models. `services/state_machine.py` re-exports it for
   existing importers; see `CHANGELOG.md` 2026-08-16.
 
+### `api/web.py` — EXISTS (Phase 3, step 2)
+- The dedicated HTML/template router (PHASE3.md §3.5). It renders Jinja2 templates only —
+  no business logic, SQL, or Divar calls belong here.
+- Owns the single configured `templates = Jinja2Templates(directory=str(TEMPLATES_DIR))`
+  instance so every HTML route resolves templates through one environment. Also exports
+  `BASE_DIR`, `TEMPLATES_DIR`, and `STATIC_DIR`, all resolved from `__file__` rather than
+  the process CWD, so paths work under local uvicorn and Docker `WORKDIR /app` alike.
+- `main.py` imports `STATIC_DIR` from this module for its `/static` mount.
+- Currently contains exactly one route: **`GET /web/probe` — a temporary foundation
+  probe** proving template rendering and static wiring. It is scaffold, not product: the
+  real pages own `GET /` and `GET /pricing` per §3.5, so the probe must be removed when
+  the public-website slice lands. Do not build on it.
+
+### `templates/` and `static/` — EXIST (Phase 3, step 2)
+Current contents are probes only — the real base template and design-system CSS are
+later Phase 3 steps:
+```
+templates/
+└── probe.html            # minimal RTL probe: lang="fa" dir="rtl", links the two assets below
+static/
+├── css/main.css          # static-serving probe only
+└── js/main.js            # static-serving probe only
+```
+- `probe.html` references assets with **root-relative** paths (`/static/css/main.css`),
+  not `url_for('static', ...)`. `url_for` renders an absolute URL, which emits `http://`
+  links behind the production TLS proxy; the app is mounted at root, so root-relative
+  paths are both smaller and proxy-safe.
+- Static assets must never contain secrets, tokens, or credentials (§3.2.1).
+- **Docker packaging (verified):** the Dockerfile copies the whole tree with `COPY . .`
+  and `.dockerignore` excludes neither `templates/` nor `static/`, so both ship in the
+  image as §3.21 requires. No Dockerfile change was needed for step 2.
+
 ### `requirements.txt` — EXISTS, needs updating for Phase 2
 Current (Phase 1):
 ```
@@ -168,6 +202,13 @@ asyncpg
 alembic
 pyjwt
 ```
+Phase 3 addition (installed in step 2 — the only new runtime dependency the web
+foundation needs; `python-multipart` was already present):
+```
+jinja2==3.1.6
+```
+> Note: the live file pins exact versions for every entry above — read it rather than
+> relying on the unpinned Phase 1/2 lists here.
 
 ### `docs/` — EXISTS, do not touch
 - Contains Divar Open API documentation, including `docs/chat/chatbot_conversations.md`
@@ -183,6 +224,7 @@ pyjwt
 | Layer | Library |
 |-------|---------|
 | Web framework | FastAPI |
+| Templates (Phase 3+) | Jinja2 via `fastapi.templating.Jinja2Templates`; static assets via Starlette `StaticFiles`. No frontend framework or build step. |
 | HTTP client | httpx (AsyncClient only) |
 | Validation | Pydantic v2 |
 | Config | pydantic-settings, `.env` file |
@@ -204,7 +246,8 @@ app/
 │   ├── oauth.py           # Phase 1 one-time tool kept; Phase 2 adds new per-client routes
 │   ├── auth.py            # Phase 2 (2.8) — OTP, refresh, logout, /auth/me
 │   ├── admin.py          # Phase 1, reworked in Phase 2
-│   └── seller.py         # Phase 2 (2.7) — POST /seller/posts (post-token registration)
+│   ├── seller.py         # Phase 2 (2.7) — POST /seller/posts (post-token registration)
+│   └── web.py            # Phase 3 (3.5) — HTML/template router; currently only GET /web/probe
 ├── services/
 │   ├── divar.py          # Phase 1, reworked in Phase 2 (header split, get_user)
 │   ├── price_lookup.py   # Phase 1, reworked in Phase 2 (per-client cache)
@@ -233,6 +276,11 @@ app/
 │   └── session.py        # Phase 2 only
 ├── data/
 │   └── prices.xlsx       # Sample fixture only — never production data
+├── templates/            # Phase 3 (3.2.2) — Jinja2 templates
+│   └── probe.html        # temporary foundation probe (step 2)
+├── static/               # Phase 3 (3.2.1) — served at /static, never contains secrets
+│   ├── css/main.css      # probe only (step 2)
+│   └── js/main.js        # probe only (step 2)
 ├── config.py             # Phase 1
 ├── logging_config.py     # Phase 1 (added 1.B3) — structured logging setup
 ├── main.py               # Phase 1
@@ -243,7 +291,8 @@ tests/
 ├── test_divar_service.py
 ├── test_price_lookup.py
 ├── test_oauth.py          # Phase 2 — covers state validation + per-client token exchange
-└── test_auth.py           # Phase 2 (2.8) — OTP, session, merge logic
+├── test_auth.py           # Phase 2 (2.8) — OTP, session, merge logic
+└── test_web.py            # Phase 3 (step 2) — probe render, /static serving, routers still mounted
 ```
 
 > **Agent rule:** Only create files listed above. Do not add files not in this tree without
