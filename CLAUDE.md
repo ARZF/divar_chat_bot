@@ -161,3 +161,25 @@ docs(plans): document seller authentication status
 build: add respx dependency
 chore(git): stop tracking codebase memory artifacts
 ci: update GitHub Actions workflow
+```
+
+## Python environment and test commands
+
+This repository uses the project virtual environment at `.venv`.
+
+Before running Python commands, use the project environment. On Windows, prefer explicit commands so the active shell environment is never ambiguous:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
+
+Rules:
+
+- Do not run bare `pytest`, `python`, or `pip` from the global interpreter.
+- Do not treat a global-environment collection/import failure as a project test failure.
+- If `.venv` is missing or cannot run the required command, stop and report it; do not install dependencies globally.
+- For any focused test run, use the same interpreter, for example:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_web.py
+```
