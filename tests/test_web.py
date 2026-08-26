@@ -77,6 +77,43 @@ def test_home_does_not_expose_seller_specific_information():
     assert "seller_id" not in html
 
 
+def test_pricing_renders_honest_public_empty_state_and_shared_navigation():
+    with TestClient(app) as c:
+        response = c.get("/pricing")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert response.text.count("<!doctype html>") == 1
+    assert 'lang="fa"' in response.text
+    assert 'dir="rtl"' in response.text
+    assert "در حال حاضر بسته‌ای برای نمایش موجود نیست." in response.text
+    assert 'aria-label="ناوبری عمومی"' in response.text
+    assert 'href="/"' in response.text
+    assert 'href="/pricing"' in response.text
+    assert 'href="/login"' in response.text
+
+
+def test_pricing_has_no_plan_or_payment_implication_or_seller_data():
+    with TestClient(app) as c:
+        response = c.get("/pricing")
+
+    html = response.text.lower()
+    for forbidden in (
+        "client_id",
+        "seller_id",
+        "access_token",
+        "refresh_token",
+        "checkout",
+        "پرداخت",
+        "خرید",
+        "فعال‌سازی",
+        "تخفیف",
+        "ماهانه",
+        "سالانه",
+    ):
+        assert forbidden not in html
+
+
 def test_temporary_probe_routes_and_templates_are_removed():
     with TestClient(app) as c:
         assert c.get("/web/probe").status_code == 404

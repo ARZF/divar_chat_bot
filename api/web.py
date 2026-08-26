@@ -33,3 +33,9 @@ logger = logging.getLogger("web")
 async def home(request: Request) -> HTMLResponse:
     """Render the anonymous public home page."""
     return templates.TemplateResponse(request, "public/home.html")
+
+
+@router.get("/pricing", response_class=HTMLResponse)
+async def pricing(request: Request) -> HTMLResponse:
+    """Render the public package availability page."""
+    return templates.TemplateResponse(request, "public/pricing.html")
