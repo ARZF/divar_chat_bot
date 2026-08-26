@@ -1,18 +1,22 @@
-"""Web foundation tests for Phase 3 steps 2-4.
+"""Public web foundation tests for Phase 3 steps 2-6.
 
-Cover Jinja inheritance, base-level HTML/RTL metadata and hooks, shared static
-assets, the shared visual-system vocabulary (§3.2.4), visible keyboard focus,
+Cover the public home route, base-level HTML/RTL metadata and hooks, shared
+static assets, the shared visual-system vocabulary, visible keyboard focus,
 and preservation of existing API routers.
 """
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
+from api.web import TEMPLATES_DIR
 from main import app
 
 
-def test_probe_inherits_base_document_and_shared_assets():
+
+def test_home_renders_public_page_with_base_document_and_shared_assets():
     with TestClient(app) as c:
-        response = c.get("/web/probe")
+        response = c.get("/")
 
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
@@ -20,78 +24,66 @@ def test_probe_inherits_base_document_and_shared_assets():
     assert response.text.count("<html") == 1
     assert 'lang="fa"' in response.text
     assert 'dir="rtl"' in response.text
-    assert "<title>بررسی زیرساخت وب</title>" in response.text
+    assert "دستیار فروش دیوار" in response.text
     assert 'href="/static/css/main.css"' in response.text
     assert 'src="/static/js/main.js"' in response.text
-    assert "وب‌اپلیکیشن فعال است" not in response.text  # heading updated in step 4
+    assert 'href="/login"' in response.text
+    assert 'href="/pricing"' in response.text
 
 
-def test_second_child_inherits_base_and_renders_page_hooks():
+def test_home_uses_shared_public_navigation():
     with TestClient(app) as c:
-        response = c.get("/web/probe/secondary")
-
-    assert response.status_code == 200
-    assert response.text.count("<!doctype html>") == 1
-    assert response.text.count("<html") == 1
-    assert 'lang="fa"' in response.text
-    assert 'dir="rtl"' in response.text
-    assert "<title>بررسی هوک‌های قالب</title>" in response.text
-    assert '<meta name="probe-hook" content="head">' in response.text
-    assert 'id="secondary-probe"' in response.text
-    assert 'dataset.pageHook = "true"' in response.text
-    assert 'href="/static/css/main.css"' in response.text
-    assert 'src="/static/js/main.js"' in response.text
-
-
-def test_probe_renders_shared_visual_vocabulary():
-    with TestClient(app) as c:
-        response = c.get("/web/probe")
+        response = c.get("/")
 
     html = response.text
+    assert '<nav class="container page-header"' in html
+    assert 'aria-label="ناوبری عمومی"' in html
+    assert html.count('href="/login"') >= 1
+    assert html.count('href="/pricing"') >= 1
 
-    # Layout container + page header
-    assert 'class="container"' in html
-    assert 'class="page-header"' in html
 
-    # Buttons: default, primary, disabled
-    assert 'class="btn"' in html
-    assert 'class="btn btn-primary"' in html
-    assert 'class="btn btn-sm"' in html
-    assert "<button" in html and "disabled" in html
+def test_home_contains_only_stated_public_capabilities():
+    with TestClient(app) as c:
+        response = c.get("/")
 
-    # Form fields: label association, hint, error text, select
-    assert '<label for="probe-name">نام محصول</label>' in html
-    assert 'class="hint"' in html
-    assert 'class="error-text"' in html
-    assert 'class="field has-error"' in html
-    assert "<select" in html
+    html = response.text
+    for phrase in (
+        "ارتباط خودکار با مشتری",
+        "یافتن قیمت",
+        "مدیریت کاتالوگ محصول",
+        "اتوماسیون چت‌بات",
+    ):
+        assert phrase in html
 
-    # Table wrapper, semantic table markup, RTL numeric columns
-    assert 'class="table-wrap"' in html
-    assert "<caption>" in html
-    assert 'scope="col"' in html
-    assert 'scope="row"' in html
-    assert '<th scope="col" class="num">قیمت (تومان)</th>' in html
-    assert '<td class="num">18,500,000</td>' in html
+    for invented_content in (
+        "تخفیف",
+        "رضایت مشتری",
+        "کاربر فعال",
+        "محبوب‌ترین",
+        "testimonial",
+        "metric",
+    ):
+        assert invented_content not in html
 
-    # Alerts (success/warning/error) carry roles
-    assert 'class="alert alert-success" role="status"' in html
-    assert 'class="alert alert-warning" role="alert"' in html
-    assert 'class="alert alert-error" role="alert"' in html
 
-    # Status indicators pair color with Persian labels
-    assert 'class="status status-success">فعال' in html
-    assert 'class="status status-warning">در انتظار تأیید' in html
-    assert 'class="status status-error">خطا' in html
-    assert 'class="status status-info">در حال به‌روزرسانی' in html
+def test_home_does_not_expose_seller_specific_information():
+    with TestClient(app) as c:
+        response = c.get("/")
 
-    # Empty + loading states
-    assert 'class="state" role="status"' in html
-    assert 'class="state state-loading" role="status"' in html
+    html = response.text
+    assert "client_id" not in html
+    assert "access_token" not in html
+    assert "refresh_token" not in html
+    assert "seller_id" not in html
 
-    # Pagination with current-page marker
-    assert 'class="pagination"' in html
-    assert 'aria-current="page"' in html
+
+def test_temporary_probe_routes_and_templates_are_removed():
+    with TestClient(app) as c:
+        assert c.get("/web/probe").status_code == 404
+        assert c.get("/web/probe/secondary").status_code == 404
+
+    assert not (Path(TEMPLATES_DIR) / "probe.html").exists()
+    assert not (Path(TEMPLATES_DIR) / "probe_secondary.html").exists()
 
 
 def test_static_css_defines_shared_visual_system():
@@ -102,13 +94,10 @@ def test_static_css_defines_shared_visual_system():
 
     assert response.status_code == 200
     assert "text/css" in response.headers["content-type"]
-
-    # RTL + typography
     assert "direction: rtl" in css
     assert "font-family:" in css
     assert "tabular-nums" in css
 
-    # Token-based vocabulary
     for token in (
         "--accent",
         "--success",
@@ -121,7 +110,6 @@ def test_static_css_defines_shared_visual_system():
     ):
         assert token in css
 
-    # Required primitives
     for primitive in (
         ".container",
         ".btn",
@@ -136,18 +124,11 @@ def test_static_css_defines_shared_visual_system():
     ):
         assert primitive in css
 
-    # RTL table overflow is owned by the wrapper, not the page
     assert ".table-wrap" in css and "overflow-x: auto" in css
-
-    # Keyboard focus stays visible
     assert ":focus-visible" in css
     assert "outline:" in css
-
-    # Responsive breakpoints exist
     assert "@media (max-width: 64rem)" in css
     assert "@media (max-width: 40rem)" in css
-
-    # Motion restraint
     assert "prefers-reduced-motion" in css
 
 

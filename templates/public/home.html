@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}دستیار فروش دیوار{% endblock %}
+
+{% block content %}
+{% include "partials/public_nav.html" %}
+
+<div class="container">
+  <header class="page-header" aria-labelledby="home-title">
+    <div>
+      <h1 id="home-title">پاسخ‌گویی و مدیریت اطلاعات فروش در دیوار</h1>
+      <p class="page-title-note">چت‌بات دیوار ارتباط با مشتریان را خودکار می‌کند و اطلاعات محصول و قیمت را در دسترس
+        پاسخ‌گویی نگه می‌دارد.</p>
+    </div>
+    <div class="page-header-actions">
+      <a class="btn btn-primary" href="/login">ورود فروشنده</a>
+      <a class="btn" href="/pricing">مشاهده تعرفه‌ها</a>
+    </div>
+  </header>
+
+  <section aria-labelledby="benefits-title">
+    <h2 id="benefits-title">کمک به فروشنده در کارهای روزانه</h2>
+    <p>پرسش‌های مشتریان به‌صورت خودکار بررسی می‌شوند تا فروشنده برای پاسخ‌گویی مداوم و یافتن اطلاعات هر محصول، زمان
+      کمتری صرف کند.</p>
+  </section>
+
+  <section aria-labelledby="capabilities-title">
+    <h2 id="capabilities-title">قابلیت‌های اصلی</h2>
+    <ul>
+      <li><strong>ارتباط خودکار با مشتری:</strong> پاسخ‌گویی به پیام‌های مشتریان در گفتگوهای دیوار.</li>
+      <li><strong>یافتن قیمت:</strong> جست‌وجوی قیمت محصول از اطلاعات ثبت‌شده فروشنده.</li>
+      <li><strong>مدیریت کاتالوگ محصول:</strong> نگهداری نام و قیمت محصولات برای پاسخ‌های دقیق‌تر.</li>
+      <li><strong>اتوماسیون چت‌بات:</strong> انجام جریان پاسخ‌گویی بدون نیاز به پیگیری دستی هر پیام.</li>
+    </ul>
+  </section>
+
+</div>
+{% endblock %}
