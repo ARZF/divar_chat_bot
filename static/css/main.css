@@ -1,5 +1,49 @@
-/* Static-serving probe (Phase 3 step 2). Replaced by the real global
-   stylesheet in the base-template step. No secrets belong in this file. */
-#probe {
-  font-family: system-ui, sans-serif;
+/* Phase 3 step 3: restrained RTL document defaults only.
+   Component primitives and the design system belong to step 4. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  direction: rtl;
+  color-scheme: light;
+  font-family: Tahoma, Arial, sans-serif;
+  line-height: 1.6;
+}
+
+body {
+  margin: 0;
+  color: #222222;
+  background: #ffffff;
+}
+
+main {
+  max-width: 72rem;
+  min-height: 100vh;
+  margin-inline: auto;
+  padding: 2rem 1.25rem;
+}
+
+h1 {
+  margin-block: 0 1rem;
+  font-size: 1.75rem;
+  line-height: 1.35;
+}
+
+p {
+  max-width: 65ch;
+  margin-block: 0 1rem;
+}
+
+a {
+  color: #8c1d2c;
+  text-underline-offset: 0.2em;
+}
+
+:focus-visible {
+  outline: 3px solid #005fcc;
+  outline-offset: 3px;
 }

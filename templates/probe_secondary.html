@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block title %}بررسی هوک‌های قالب{% endblock %}
+
+{% block head %}<meta name="probe-hook" content="head">{% endblock %}
+
+{% block content %}
+  <p id="secondary-probe">قالب فرزند دوم فعال است.</p>
+{% endblock %}
+
+{% block scripts %}<script>document.documentElement.dataset.pageHook = "true";</script>{% endblock %}

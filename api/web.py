@@ -31,9 +31,15 @@ logger = logging.getLogger("web")
 
 @router.get("/web/probe", response_class=HTMLResponse)
 async def probe(request: Request) -> HTMLResponse:
-    """Foundation probe: proves template rendering and static asset wiring.
+    """Foundation probe: proves template inheritance and static asset wiring.
 
-    Temporary scaffold for Phase 3 step 2 — replaced by the real pages in the
-    public-website slice.
+    Temporary scaffold for Phase 3 foundation steps — replaced by the real
+    pages in the public-website slice.
     """
     return templates.TemplateResponse(request, "probe.html")
+
+
+@router.get("/web/probe/secondary", response_class=HTMLResponse)
+async def secondary_probe(request: Request) -> HTMLResponse:
+    """Render a second base-template child for the inheritance test gate."""
+    return templates.TemplateResponse(request, "probe_secondary.html")
