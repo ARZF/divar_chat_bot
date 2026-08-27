@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block title %}میزکار فروشنده | دستیار فروش دیوار{% endblock %}
+
+{% block content %}
+<div class="container dashboard-layout">
+  {% include "partials/dashboard_nav.html" %}
+
+  <div class="dashboard-main">
+    <header class="page-header" aria-labelledby="dashboard-title">
+      <div>
+        <h1 id="dashboard-title">میزکار فروشنده</h1>
+        <p class="page-title-note">نمای کلی حساب شما؛ اطلاعات پس از ورود بارگذاری می‌شود.</p>
+      </div>
+      <button type="button" class="btn" data-dashboard-logout>خروج از حساب</button>
+    </header>
+
+    <div id="dashboard-loading" class="state state-loading">در حال بارگذاری اطلاعات میزکار…</div>
+
+    <div id="dashboard-error" class="alert alert-error" role="alert" hidden>
+      <div>
+        <p id="dashboard-error-text">بارگذاری اطلاعات میزکار انجام نشد.</p>
+        <p><a href="/login">بازگشت به صفحهٔ ورود</a></p>
+      </div>
+    </div>
+
+    <div id="dashboard-data" hidden>
+      <section aria-labelledby="account-heading">
+        <h2 id="account-heading">حساب فروشنده</h2>
+        <p class="dashboard-identity">شمارهٔ تلفن: <span id="seller-phone" class="num">—</span></p>
+      </section>
+
+      <section aria-labelledby="overview-heading">
+        <h2 id="overview-heading">نمای کلی</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">بخش</th>
+                <th scope="col" class="num">تعداد</th>
+                <th scope="col">مدیریت</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>آگهی‌های ثبت‌شده</td>
+                <td class="num" id="post-count">—</td>
+                <td><a href="/dashboard/listings">مدیریت آگهی‌ها</a></td>
+              </tr>
+              <tr>
+                <td>گفتگوهای چت‌بات</td>
+                <td class="num" id="conversation-count">—</td>
+                <td><a href="/dashboard/conversations">مدیریت گفتگوها</a></td>
+              </tr>
+              <tr>
+                <td>گفتگوهای پیام‌رسان</td>
+                <td class="num" id="post-conversation-count">—</td>
+                <td><a href="/dashboard/conversations">مدیریت گفتگوها</a></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section aria-labelledby="subscription-heading">
+        <h2 id="subscription-heading">بسته و اشتراک</h2>
+        <div class="alert">
+          <p>اطلاعات بسته و اشتراک هنوز در دسترس نیست؛ پس از راه‌اندازی بخش اشتراک، وضعیت همین‌جا نمایش داده می‌شود.</p>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/dashboard.js"></script>
+{% endblock %}

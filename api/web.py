@@ -63,3 +63,15 @@ async def login(request: Request) -> HTMLResponse:
 async def login_otp(request: Request) -> HTMLResponse:
     """Render the OTP form before browser API integration is added."""
     return templates.TemplateResponse(request, "auth/otp.html")
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+async def dashboard(request: Request) -> HTMLResponse:
+    """Render the seller dashboard shell (§3.6).
+
+    First protected page under the step 12 convention: no server-side auth or
+    DB access here — the shell renders anonymously with loading placeholders,
+    and static/js/dashboard.js restores the session and loads the real,
+    tenant-scoped data via the JSON summary API.
+    """
+    return templates.TemplateResponse(request, "dashboard/dashboard.html")

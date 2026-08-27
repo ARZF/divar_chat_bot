@@ -1,8 +1,8 @@
-"""Public web tests for Phase 3 steps 2-12.
+"""Public web tests for Phase 3 steps 2-13.
 
 Cover public pages, login/OTP presentation, shared static assets, the shared
-visual-system vocabulary, visible keyboard focus, existing API routers, and
-the client-side session-restoration module.
+visual-system vocabulary, visible keyboard focus, existing API routers, the
+client-side session-restoration module, and the dashboard shell.
 """
 
 from pathlib import Path
@@ -370,4 +370,111 @@ def test_existing_api_routes_still_registered():
         "/admin/upload-prices",
         "/seller/posts",
         "/oauth/callback",
+        "/api/v1/seller/dashboard/summary",
     } <= paths
+
+
+# --------------------------------------------------------------------------------------
+# Dashboard shell (Phase 3 step 13)
+# --------------------------------------------------------------------------------------
+
+def test_dashboard_renders_anonymously_with_shared_assets_and_states():
+    with TestClient(app) as c:
+        response = c.get("/dashboard")
+
+    html = response.text
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert response.text.count("<!doctype html>") == 1
+    assert 'lang="fa"' in html
+    assert 'dir="rtl"' in html
+    assert 'src="/static/js/session.js"' in html
+    assert 'src="/static/js/dashboard.js"' in html
+    # The three UI states exist: loading, error, and data (hidden until JS fills it).
+    assert 'id="dashboard-loading"' in html
+    assert 'id="dashboard-error"' in html
+    assert 'id="dashboard-data"' in html
+    assert 'role="alert"' in html
+
+
+def test_dashboard_nav_lists_all_future_sections_with_current_page_marker():
+    with TestClient(app) as c:
+        html = c.get("/dashboard").text
+
+    assert 'aria-label="ناوبری میزکار فروشنده"' in html
+    for href in (
+        "/dashboard",
+        "/dashboard/products",
+        "/dashboard/listings",
+        "/dashboard/conversations",
+        "/dashboard/subscription",
+        "/dashboard/settings",
+    ):
+        assert f'href="{href}"' in html
+    # Only the current page is marked; future pages are plain links (404 is
+    # expected until their steps land — that's the honest state, not a stub).
+    assert html.count('aria-current="page"') == 1
+    assert 'href="/dashboard" aria-current="page"' in html
+
+
+def test_dashboard_shows_identity_counts_and_honest_subscription_placeholder():
+    with TestClient(app) as c:
+        html = c.get("/dashboard").text
+
+    # Identity and the three tenant-scoped count cells.
+    assert 'id="seller-phone"' in html
+    assert 'id="post-count"' in html
+    assert 'id="conversation-count"' in html
+    assert 'id="post-conversation-count"' in html
+    # Logout is wired to the shared session module (data attribute hook).
+    assert "data-dashboard-logout" in html
+    # Subscription slot exists and states unavailability honestly — no
+    # fabricated plan names, prices, or expiry claims.
+    assert "هنوز در دسترس نیست" in html
+    for invented in ("بستهٔ تجاری", "اشتراک فعال", "۳۰ روز", "پرکاربردترین"):
+        assert invented not in html
+
+
+def test_dashboard_exposes_no_auth_or_seller_secrets():
+    with TestClient(app) as c:
+        html = c.get("/dashboard").text.lower()
+
+    for forbidden in (
+        "client_id",
+        "seller_id",
+        "access_token",
+        "refresh_token",
+        "otp_hash",
+        "client_secret",
+        "jwt_secret",
+        "password",
+    ):
+        assert forbidden not in html
+
+
+def test_dashboard_script_uses_authfetch_and_shared_session_module():
+    with TestClient(app) as c:
+        response = c.get("/static/js/dashboard.js")
+
+    js = response.text
+    assert response.status_code == 200
+    assert "javascript" in response.headers["content-type"]
+    # Data loads through the shared session module only — no raw fetch, no
+    # duplicated refresh/retry/redirect logic, no second logout endpoint.
+    assert "window.DivarSession.authFetch" in js
+    assert "window.DivarSession.logout" in js
+    assert "/api/v1/seller/dashboard/summary" in js
+    assert "/auth/refresh" not in js
+    assert "/auth/logout" not in js
+    assert "window.location" not in js
+    assert "fetch(" not in js.replace("authFetch(", "")
+    for forbidden in (
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "setItem",
+        "innerHTML",
+        "console.",
+        "client_id",
+    ):
+        assert forbidden not in js

@@ -9,14 +9,22 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_client_id
 from db.session import get_db
+from models.client import Client
+from models.conversation import Conversation
 from models.post import Post
-from schemas.seller import PostRegisterRequest, PostRegisterResponse
+from models.post_conversation import PostConversation
+from schemas.seller import (
+    DashboardSummaryResponse,
+    PostRegisterRequest,
+    PostRegisterResponse,
+)
 
 router = APIRouter()
 logger = logging.getLogger("seller")
@@ -55,4 +63,41 @@ async def register_posts(
     return PostRegisterResponse(
         registered=registered,
         already_existed=already_existed,
+    )
+
+
+@router.get(
+    "/api/v1/seller/dashboard/summary",
+    response_model=DashboardSummaryResponse,
+)
+async def dashboard_summary(
+    client_id: int = Depends(get_current_client_id),
+    db: AsyncSession = Depends(get_db),
+) -> DashboardSummaryResponse:
+    """Lightweight overview counts for the dashboard shell (§3.6, §3.23).
+
+    §3.13 gives NEW seller APIs the `/api/v1/seller/...` prefix; the existing
+    `/seller/posts` keeps its established Phase 2 contract. Identity follows
+    `/auth/me` semantics (401 when the JWT's client no longer exists). Every
+    count filters on the JWT-derived `client_id` — COUNT() only, no rows are
+    loaded, and no `client_id` is ever accepted from the browser.
+    """
+    result = await db.execute(select(Client).where(Client.id == client_id))
+    client = result.scalar_one_or_none()
+    if client is None:
+        raise HTTPException(status_code=401, detail="Client not found")
+
+    async def _count(model: type[Post] | type[Conversation] | type[PostConversation]) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(model)
+            .where(model.client_id == client_id)
+        )
+        return (await db.execute(stmt)).scalar_one()
+
+    return DashboardSummaryResponse(
+        phone_number=client.phone_number,
+        post_count=await _count(Post),
+        conversation_count=await _count(Conversation),
+        post_conversation_count=await _count(PostConversation),
     )

@@ -1,0 +1,12 @@
+{% set nav_active = dashboard_nav_active | default("dashboard") %}
+<nav class="dashboard-nav" aria-label="ناوبری میزکار فروشنده">
+  <p class="dashboard-nav-title">دستیار فروش دیوار</p>
+  <ul>
+    <li><a href="/dashboard"{% if nav_active == "dashboard" %} aria-current="page"{% endif %}>میزکار</a></li>
+    <li><a href="/dashboard/products"{% if nav_active == "products" %} aria-current="page"{% endif %}>محصولات</a></li>
+    <li><a href="/dashboard/listings"{% if nav_active == "listings" %} aria-current="page"{% endif %}>آگهی‌ها</a></li>
+    <li><a href="/dashboard/conversations"{% if nav_active == "conversations" %} aria-current="page"{% endif %}>گفتگوها</a></li>
+    <li><a href="/dashboard/subscription"{% if nav_active == "subscription" %} aria-current="page"{% endif %}>اشتراک</a></li>
+    <li><a href="/dashboard/settings"{% if nav_active == "settings" %} aria-current="page"{% endif %}>تنظیمات</a></li>
+  </ul>
+</nav>

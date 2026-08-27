@@ -35,3 +35,16 @@ class PostRegisterResponse(BaseModel):
 
     registered: int
     already_existed: int
+
+
+class DashboardSummaryResponse(BaseModel):
+    """Seller identity plus lightweight tenant-scoped counts.
+
+    Response of `GET /api/v1/seller/dashboard/summary` (§3.6). Only data that
+    already exists — no plan/subscription fields until §3.10 lands.
+    """
+
+    phone_number: str | None
+    post_count: int
+    conversation_count: int
+    post_conversation_count: int

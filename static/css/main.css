@@ -547,6 +547,76 @@ td.num {
   color: var(--ink-faint);
 }
 
+/* --- Dashboard shell --------------------------------------------------- */
+
+/* Two-column workspace: fixed sidebar nav + main column. Not a card grid —
+   sections and table rows carry the hierarchy (§3.2.4). */
+.dashboard-layout {
+  display: grid;
+  grid-template-columns: 14rem 1fr;
+  gap: var(--space-6);
+  align-items: start;
+}
+
+.dashboard-nav {
+  border: var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.dashboard-nav-title {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-block-end: var(--border);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.dashboard-nav ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dashboard-nav a {
+  display: block;
+  padding: var(--space-2) var(--space-4);
+  border-block-end: var(--border);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+
+.dashboard-nav li:last-child a {
+  border-block-end: 0;
+}
+
+.dashboard-nav a:hover {
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.dashboard-nav a[aria-current="page"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.dashboard-main section {
+  margin-block-end: var(--space-5);
+}
+
+.dashboard-main section h2 {
+  border-block-end: var(--border);
+  padding-block-end: var(--space-2);
+}
+
+.dashboard-identity {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-soft);
+}
+
 /* --- Responsive -------------------------------------------------------- */
 
 /* Tablet: modest density trim. */
@@ -579,6 +649,22 @@ td.num {
   /* Page-level overflow clamp: the table wrapper scrolls instead. */
   body {
     overflow-x: clip;
+  }
+
+  /* Dashboard becomes single-column; the nav turns into a compact list
+     above the content rather than a shrunken sidebar. */
+  .dashboard-layout {
+    grid-template-columns: 1fr;
+    gap: var(--space-4);
+  }
+
+  .dashboard-nav ul {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .dashboard-nav a {
+    padding: var(--space-2) var(--space-3);
   }
 }
 
