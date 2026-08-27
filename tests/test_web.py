@@ -1,8 +1,7 @@
-"""Public web foundation tests for Phase 3 steps 2-6.
+"""Public web tests for Phase 3 steps 2-9.
 
-Cover the public home route, base-level HTML/RTL metadata and hooks, shared
-static assets, the shared visual-system vocabulary, visible keyboard focus,
-and preservation of existing API routers.
+Cover public pages, login/OTP presentation, shared static assets, the shared
+visual-system vocabulary, visible keyboard focus, and existing API routers.
 """
 
 from pathlib import Path
@@ -112,6 +111,79 @@ def test_pricing_has_no_plan_or_payment_implication_or_seller_data():
         "سالانه",
     ):
         assert forbidden not in html
+
+
+def test_login_renders_safe_accessible_presentation_only():
+    with TestClient(app) as c:
+        response = c.get("/login")
+
+    html = response.text
+    assert response.status_code == 200
+    assert 'lang="fa"' in html
+    assert 'dir="rtl"' in html
+    assert '<label for="phone-number">شمارهٔ تلفن</label>' in html
+    assert 'type="tel"' in html
+    assert 'autocomplete="tel"' in html
+    assert 'inputmode="tel"' in html
+    assert 'aria-describedby="login-help"' in html
+    assert 'type="button" class="btn btn-primary" disabled' in html
+    assert 'href="/oauth/start"' in html
+    assert 'action="#"' in html
+    assert 'onsubmit="return false;"' in html
+    assert "/auth/otp/request" not in html
+
+
+def test_otp_renders_safe_accessible_feedback_hooks():
+    with TestClient(app) as c:
+        response = c.get("/login/otp")
+
+    html = response.text
+    assert response.status_code == 200
+    assert 'lang="fa"' in html
+    assert 'dir="rtl"' in html
+    assert 'id="phone-context"' in html
+    assert '<label for="otp-code">کد یک‌بارمصرف</label>' in html
+    assert 'autocomplete="one-time-code"' in html
+    assert 'inputmode="numeric"' in html
+    assert 'aria-describedby="otp-help otp-error"' in html
+    assert 'id="otp-error" class="error-text" role="alert" hidden' in html
+    assert 'id="otp-feedback"' in html
+    assert 'aria-labelledby="feedback-title"' in html
+    assert 'aria-live="polite"' in html
+    assert '<section id="otp-feedback"' in html and "hidden" in html
+    for hook in (
+        "otp-expired",
+        "otp-rate-limit",
+        "otp-retry",
+        "otp-loading",
+        "otp-success",
+    ):
+        assert f'id="{hook}"' in html
+    assert 'type="button" class="btn btn-primary" disabled' in html
+    assert 'action="#"' in html
+    assert 'onsubmit="return false;"' in html
+    assert "/auth/otp/verify" not in html
+
+
+def test_login_pages_expose_no_auth_or_seller_secrets():
+    with TestClient(app) as c:
+        responses = (c.get("/login"), c.get("/login/otp"))
+
+    for response in responses:
+        html = response.text.lower()
+        for forbidden in (
+            "client_id",
+            "seller_id",
+            "access_token",
+            "refresh_token",
+            "otp_hash",
+            "client_secret",
+            "jwt_secret",
+            "localstorage",
+            "sessionstorage",
+            "password",
+        ):
+            assert forbidden not in html
 
 
 def test_temporary_probe_routes_and_templates_are_removed():

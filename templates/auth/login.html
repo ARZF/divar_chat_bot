@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}ورود فروشنده | دستیار فروش دیوار{% endblock %}
+
+{% block content %}
+<div class="container auth-flow">
+  <p><a href="/">بازگشت به صفحهٔ اصلی</a></p>
+
+  <header class="page-header" aria-labelledby="login-title">
+    <div>
+      <h1 id="login-title">ورود فروشنده</h1>
+      <p class="page-title-note">برای ورود، شمارهٔ تلفن خود را وارد کنید.</p>
+    </div>
+  </header>
+
+  <form action="#" method="post" aria-describedby="login-help" onsubmit="return false;">
+    <div class="field">
+      <label for="phone-number">شمارهٔ تلفن</label>
+      <input id="phone-number" name="phone_number" type="tel" autocomplete="tel" inputmode="tel"
+        aria-describedby="login-help" required>
+      <p id="login-help" class="hint">کد یک‌بارمصرف برای این شماره ارسال خواهد شد.</p>
+    </div>
+
+    <button type="button" class="btn btn-primary" disabled aria-disabled="true">ارسال کد ورود</button>
+  </form>
+
+  <p><a class="btn" href="/oauth/start">ورود با دیوار</a></p>
+</div>
+{% endblock %}

@@ -265,6 +265,13 @@ main {
   padding-inline: var(--space-3);
 }
 
+/* --- Authentication flow --------------------------------------------- */
+
+.auth-flow {
+  max-width: 30rem;
+  margin-inline: auto;
+}
+
 /* --- Forms ------------------------------------------------------------ */
 
 .field {

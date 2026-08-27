@@ -39,3 +39,15 @@ async def home(request: Request) -> HTMLResponse:
 async def pricing(request: Request) -> HTMLResponse:
     """Render the public package availability page."""
     return templates.TemplateResponse(request, "public/pricing.html")
+
+
+@router.get("/login", response_class=HTMLResponse)
+async def login(request: Request) -> HTMLResponse:
+    """Render the login form before browser API integration is added."""
+    return templates.TemplateResponse(request, "auth/login.html")
+
+
+@router.get("/login/otp", response_class=HTMLResponse)
+async def login_otp(request: Request) -> HTMLResponse:
+    """Render the OTP form before browser API integration is added."""
+    return templates.TemplateResponse(request, "auth/otp.html")

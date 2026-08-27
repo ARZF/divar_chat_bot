@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}تأیید کد ورود | دستیار فروش دیوار{% endblock %}
+
+{% block content %}
+<div class="container auth-flow">
+  <p><a href="/login">بازگشت به ورود</a></p>
+
+  <header class="page-header" aria-labelledby="otp-title">
+    <div>
+      <h1 id="otp-title">تأیید کد ورود</h1>
+      <p class="page-title-note" id="phone-context">کد ارسال‌شده به شمارهٔ تلفن خود را وارد کنید.</p>
+    </div>
+  </header>
+
+  <form action="#" method="post" aria-describedby="otp-help" onsubmit="return false;">
+    <div class="field">
+      <label for="otp-code">کد یک‌بارمصرف</label>
+      <input id="otp-code" name="code" type="text" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]*"
+        aria-describedby="otp-help otp-error" required>
+      <p id="otp-help" class="hint">کد را بدون فاصله وارد کنید.</p>
+      <p id="otp-error" class="error-text" role="alert" hidden></p>
+    </div>
+
+    <button type="button" class="btn btn-primary" disabled aria-disabled="true">تأیید کد</button>
+  </form>
+
+  <section id="otp-feedback" aria-labelledby="feedback-title" aria-live="polite" hidden>
+    <h2 id="feedback-title">وضعیت ورود</h2>
+    <p id="otp-expired" class="hint" hidden>کد ورود منقضی شده است.</p>
+    <p id="otp-rate-limit" class="hint" hidden>درخواست‌های ورود بیش از حد مجاز است.</p>
+    <p id="otp-retry" class="hint" hidden>برای دریافت کد جدید دوباره تلاش کنید.</p>
+    <p id="otp-loading" class="hint" hidden>در حال بررسی کد ورود...</p>
+    <p id="otp-success" class="hint" hidden>کد ورود با موفقیت بررسی شد.</p>
+  </section>
+</div>
+{% endblock %}
