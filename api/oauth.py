@@ -15,7 +15,6 @@ from api.auth import find_or_create_client, issue_session
 from config import settings
 from db.session import get_db
 from models.oauth_token import OAuthToken
-from schemas.auth import TokenResponse
 import services.divar as divar_service
 
 logger = logging.getLogger("oauth")
@@ -71,12 +70,11 @@ async def oauth_start() -> RedirectResponse:
     return RedirectResponse(url=auth_url)
 
 
-@router.get("/oauth/callback", response_model=TokenResponse)
+@router.get("/oauth/callback")
 async def oauth_callback(
     request: Request,
-    response: Response,
     db: AsyncSession = Depends(get_db),
-) -> TokenResponse | JSONResponse:
+) -> Response:
     """Complete seller login, persist Divar tokens, and issue the app session."""
     state = request.query_params.get("state")
     code = request.query_params.get("code")
@@ -192,11 +190,14 @@ async def oauth_callback(
             exc_info=True,
         )
 
-    session = await issue_session(db, client, response)
-    # TEMPORARY: return the same JSON contract as OTP login because no seller
-    # frontend/panel callback URL exists yet. Replace this with RedirectResponse once
-    # that destination is defined; never expose the raw Divar OAuth token response.
-    return TokenResponse(**session)
+    # Hand off to the web destination without ever exposing a token in the URL:
+    # issue_session sets the existing HTTP-only Secure refresh cookie directly on
+    # the redirect response (FastAPI does not merge cookies from an injected
+    # Response parameter when a Response object is returned), and the browser then
+    # recovers the access token via the existing POST /auth/refresh flow.
+    redirect = RedirectResponse(url="/dashboard")
+    await issue_session(db, client, redirect)
+    return redirect
 
 
 @router.get("/oauth/dev/start")

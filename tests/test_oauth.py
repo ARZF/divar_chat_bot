@@ -95,9 +95,7 @@ async def test_oauth_callback_issues_session_when_subscription_registration_fail
     issue_session = mocker.patch.object(
         oauth_module,
         "issue_session",
-        new=mocker.AsyncMock(
-            return_value={"access_token": "app-access", "expires_in": 1800}
-        ),
+        new=mocker.AsyncMock(return_value={"access_token": "app-access", "expires_in": 1800}),
     )
     mocker.patch.object(
         divar_service,
@@ -110,12 +108,14 @@ async def test_oauth_callback_issues_session_when_subscription_registration_fail
     db.execute = mocker.AsyncMock(return_value=result_proxy)
     db.commit = mocker.AsyncMock()
 
-    result = await oauth_module.oauth_callback(
-        _request("state=state-1&code=authorization-code"), Response(), db
-    )
+    result = await oauth_module.oauth_callback(_request("state=state-1&code=authorization-code"), db)
 
-    assert result == TokenResponse(access_token="app-access", expires_in=1800)
+    assert isinstance(result, RedirectResponse)
+    assert result.headers["location"] == "/dashboard"
     issue_session.assert_awaited_once()
+    # The redirect carries no token material in its URL or body.
+    assert "app-access" not in result.headers["location"]
+    assert not result.body
 
 
 @pytest.mark.asyncio
@@ -153,9 +153,7 @@ async def test_oauth_callback_persists_tokens_and_issues_session(mocker):
     issue_session = mocker.patch.object(
         oauth_module,
         "issue_session",
-        new=mocker.AsyncMock(
-            return_value={"access_token": "app-access", "expires_in": 1800}
-        ),
+        new=mocker.AsyncMock(return_value={"access_token": "app-access", "expires_in": 1800}),
     )
     result_proxy = mocker.Mock()
     result_proxy.scalar_one_or_none.return_value = None
@@ -165,17 +163,21 @@ async def test_oauth_callback_persists_tokens_and_issues_session(mocker):
     before = datetime.now(timezone.utc)
 
     result = await oauth_module.oauth_callback(
-        _request("state=state-1&code=authorization-code"), Response(), db
+        _request("state=state-1&code=authorization-code"), db
     )
 
-    assert result == TokenResponse(access_token="app-access", expires_in=1800)
+    assert isinstance(result, RedirectResponse)
+    assert result.headers["location"] == "/dashboard"
     assert "state-1" not in oauth_module._login_states
     find_client.assert_awaited_once_with(
         db,
         phone_number="09123456789",
         divar_user_id="divar-user-1",
     )
-    issue_session.assert_awaited_once()
+    # The session is issued on the redirect response itself so the refresh cookie
+    # actually reaches the browser (FastAPI drops injected-Response cookies when a
+    # Response object is returned directly).
+    issue_session.assert_awaited_once_with(db, client, result)
     stored = db.add.call_args.args[0]
     assert isinstance(stored, OAuthToken)
     assert stored.client_id == 7
@@ -257,9 +259,7 @@ async def test_oauth_callback_recovers_from_concurrent_token_insert(mocker):
     mocker.patch.object(
         oauth_module,
         "issue_session",
-        new=mocker.AsyncMock(
-            return_value={"access_token": "app-access", "expires_in": 1800}
-        ),
+        new=mocker.AsyncMock(return_value={"access_token": "app-access", "expires_in": 1800}),
     )
     oauth_module._login_states.update(
         {
@@ -271,17 +271,15 @@ async def test_oauth_callback_recovers_from_concurrent_token_insert(mocker):
 
     results = await asyncio.gather(
         oauth_module.oauth_callback(
-            _request("state=state-1&code=authorization-code-1"), Response(), dbs[0]
+            _request("state=state-1&code=authorization-code-1"), dbs[0]
         ),
         oauth_module.oauth_callback(
-            _request("state=state-2&code=authorization-code-2"), Response(), dbs[1]
+            _request("state=state-2&code=authorization-code-2"), dbs[1]
         ),
     )
 
-    assert results == [
-        TokenResponse(access_token="app-access", expires_in=1800),
-        TokenResponse(access_token="app-access", expires_in=1800),
-    ]
+    assert all(isinstance(r, RedirectResponse) for r in results)
+    assert {r.headers["location"] for r in results} == {"/dashboard"}
     assert state["row"] is not None
     assert state["row"].client_id == 7
     assert state["row"].divar_access_token in {
@@ -330,7 +328,7 @@ async def test_oauth_callback_without_phone_returns_403_and_writes_nothing(mocke
     db.commit = mocker.AsyncMock()
 
     result = await oauth_module.oauth_callback(
-        _request("state=state-1&code=authorization-code"), Response(), db
+        _request("state=state-1&code=authorization-code"), db
     )
 
     assert isinstance(result, JSONResponse)
@@ -341,3 +339,186 @@ async def test_oauth_callback_without_phone_returns_403_and_writes_nothing(mocke
     db.execute.assert_not_awaited()
     db.commit.assert_not_awaited()
     db.add.assert_not_called()
+
+
+# --------------------------------------------------------------------------------------
+# Step 11 — redirect handoff contract and state-validation security
+# --------------------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query,expected_detail",
+    [
+        ("code=authorization-code", "Missing state parameter"),
+        ("state=never-issued&code=authorization-code", "Invalid state parameter"),
+        ("state=state-1", "Authorization code not provided"),
+    ],
+)
+async def test_oauth_callback_rejects_invalid_requests_without_session(query, expected_detail, mocker):
+    oauth_module._login_states["state-1"] = oauth_module.time.time() + 600
+    issue_session = mocker.patch.object(
+        oauth_module, "issue_session", new=mocker.AsyncMock()
+    )
+    db = mocker.MagicMock(spec=AsyncSession)
+
+    result = await oauth_module.oauth_callback(_request(query), db)
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 400
+    assert result.body.decode() == f'{{"detail":"{expected_detail}"}}'
+    issue_session.assert_not_awaited()
+    # A rejected callback never leaks a token in its body or URL.
+    assert "access_token" not in result.body.decode().lower()
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_state_expires_after_ten_minutes(mocker):
+    mocker.patch.object(oauth_module.time, "time", return_value=1_000.0)
+    # State was issued at t=1 and expires at t=601; the callback arrives at t=1_000.
+    oauth_module._login_states["stale-state"] = 601.0
+    issue_session = mocker.patch.object(
+        oauth_module, "issue_session", new=mocker.AsyncMock()
+    )
+    db = mocker.MagicMock(spec=AsyncSession)
+
+    result = await oauth_module.oauth_callback(
+        _request("state=stale-state&code=authorization-code"), db
+    )
+
+    assert isinstance(result, JSONResponse)
+    assert result.status_code == 400
+    assert "stale-state" not in oauth_module._login_states
+    issue_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_replayed_state_is_rejected(mocker):
+    """A state that already produced a redirect must not issue a second session."""
+    oauth_module._login_states["state-1"] = oauth_module.time.time() + 600
+    token_response = mocker.Mock()
+    token_response.raise_for_status.return_value = None
+    token_response.json.return_value = {
+        "access_token": "divar-access",
+        "refresh_token": "divar-refresh",
+        "expires_in": 604800,
+    }
+    mocker.patch.object(
+        divar_service,
+        "client",
+        new=SimpleNamespace(post=mocker.AsyncMock(return_value=token_response)),
+    )
+    mocker.patch.object(
+        divar_service,
+        "get_user",
+        new=mocker.AsyncMock(
+            return_value={"phone_number": "09123456789", "user_id": "divar-user-1"}
+        ),
+    )
+    mocker.patch.object(
+        oauth_module,
+        "find_or_create_client",
+        new=mocker.AsyncMock(return_value=SimpleNamespace(id=7)),
+    )
+    issue_session = mocker.patch.object(
+        oauth_module,
+        "issue_session",
+        new=mocker.AsyncMock(return_value={"access_token": "app-access", "expires_in": 1800}),
+    )
+    result_proxy = mocker.Mock()
+    result_proxy.scalar_one_or_none.return_value = None
+    db = mocker.MagicMock(spec=AsyncSession)
+    db.execute = mocker.AsyncMock(return_value=result_proxy)
+    db.commit = mocker.AsyncMock()
+
+    first = await oauth_module.oauth_callback(
+        _request("state=state-1&code=authorization-code"), db
+    )
+    assert isinstance(first, RedirectResponse)
+    assert first.headers["location"] == "/dashboard"
+    issue_session.assert_awaited_once()
+
+    replay = await oauth_module.oauth_callback(
+        _request("state=state-1&code=authorization-code"), db
+    )
+    assert isinstance(replay, JSONResponse)
+    assert replay.status_code == 400
+    issue_session.assert_awaited_once()  # still exactly one session
+
+
+@pytest.mark.asyncio
+async def test_oauth_callback_redirect_sets_http_only_secure_refresh_cookie(mocker):
+    """End-to-end through the REAL issue_session: the redirect must carry the
+    existing refresh-cookie attributes (HttpOnly, Secure, SameSite=Lax, Path=/auth)
+    and expose no access token anywhere in the response."""
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import StaticPool
+    from models.client import Client
+    from models.refresh_token import RefreshToken
+
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(
+            lambda c: Client.metadata.create_all(
+                c,
+                tables=[Client.__table__, RefreshToken.__table__, OAuthToken.__table__],
+            )
+        )
+    sessions = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    oauth_module._login_states["state-1"] = oauth_module.time.time() + 600
+    token_response = mocker.Mock()
+    token_response.raise_for_status.return_value = None
+    token_response.json.return_value = {
+        "access_token": "divar-access",
+        "refresh_token": "divar-refresh",
+        "expires_in": 604800,
+    }
+    mocker.patch.object(
+        divar_service,
+        "client",
+        new=SimpleNamespace(post=mocker.AsyncMock(return_value=token_response)),
+    )
+    mocker.patch.object(
+        divar_service,
+        "get_user",
+        new=mocker.AsyncMock(
+            return_value={"phone_number": "09123456789", "user_id": "divar-user-1"}
+        ),
+    )
+    mocker.patch.object(
+        divar_service,
+        "register_event_subscription",
+        new=mocker.AsyncMock(return_value=None),
+    )
+
+    try:
+        async with sessions() as db:
+            # The REAL issue_session runs — nothing about the session mechanism is mocked.
+            response = await oauth_module.oauth_callback(
+                _request("state=state-1&code=authorization-code"),
+                db,
+            )
+    finally:
+        await engine.dispose()
+
+    assert isinstance(response, RedirectResponse)
+    assert response.status_code == 307
+    assert response.headers["location"] == "/dashboard"
+    assert "access_token" not in response.body.decode().lower()
+    assert "divar-access" not in response.body.decode()
+    assert "divar-refresh" not in response.body.decode()
+    assert "?" not in response.headers["location"]
+    assert "=" not in response.headers["location"]
+
+    cookie = response.headers.get("set-cookie")
+    assert cookie is not None, "redirect must carry the refresh cookie"
+    assert "httponly" in cookie.lower()
+    assert "secure" in cookie.lower()
+    assert "samesite=lax" in cookie.lower()
+    assert "path=/auth" in cookie.lower()
+    assert cookie.split(";")[0].split("=", 1)[1]  # refresh token value present
+    assert len(response.headers.getlist("set-cookie")) == 1
