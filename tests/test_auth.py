@@ -332,6 +332,37 @@ def test_logout_deletes_refresh_token(client, sms):
     assert after.status_code == 401
 
 
+def test_protected_page_session_restoration_flow(client, sms):
+    """The HTTP sequence static/js/session.js performs on a protected page:
+    first data call without the (page-reload-lost) access token -> 401, exactly
+    one refresh, one retry with the new token, then logout rejecting any later
+    restoration attempt."""
+    client.post("/auth/otp/request", json={"phone_number": PHONE})
+    client.post(
+        "/auth/otp/verify", json={"phone_number": PHONE, "code": sms.last_code}
+    )
+
+    # A page reload drops the in-memory access token; only the cookie remains.
+    assert client.get("/auth/me").status_code == 401
+
+    refreshed = client.post("/auth/refresh")
+    assert refreshed.status_code == 200
+    access_token = refreshed.json()["access_token"]
+
+    # The single retry with the new token succeeds.
+    retried = client.get(
+        "/auth/me", headers={"Authorization": f"Bearer {access_token}"}
+    )
+    assert retried.status_code == 200
+    assert retried.json()["phone_number"] == PHONE
+
+    # Logout clears the in-memory token client-side and the cookie server-side,
+    # so a later protected access attempt cannot restore the session.
+    assert client.post("/auth/logout").status_code == 200
+    assert client.get("/auth/me").status_code == 401
+    assert client.post("/auth/refresh").status_code == 401
+
+
 # --------------------------------------------------------------------------------------
 # /auth/me
 # --------------------------------------------------------------------------------------

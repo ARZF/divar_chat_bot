@@ -6,6 +6,18 @@ secrets may be passed into a template context or a static asset.
 
 `templates` is defined here (not in `main.py`) so every HTML route resolves
 templates through one configured environment.
+
+Protected-route convention (phase 3 step 12): HTML routes have no server-side
+auth dependency. The refresh cookie is scoped to path=/auth (api/auth.py), so
+a plain browser GET of a protected page never carries it and a server-side
+cookie check cannot distinguish anonymous from logged-in visitors — it would
+redirect everyone to /login. Protected pages are therefore gated by the shared
+client-side module `static/js/session.js` (loaded by `templates/base.html`):
+data is fetched only through `DivarSession.authFetch()`, which attaches the
+in-memory access token, on 401 calls POST /auth/refresh exactly once, retries
+the request once, and redirects to /login when that fails. Real enforcement
+stays with `get_current_client_id` on the JSON APIs; the cookie is never
+accepted as authentication for API endpoints.
 """
 
 from __future__ import annotations

@@ -2,7 +2,6 @@
     "use strict";
 
     const PHONE_STORAGE_KEY = "divar_auth_phone";
-    let inMemoryAccessToken = null;
 
     const setHidden = (element, hidden) => {
         if (element) {
@@ -205,7 +204,9 @@
                 });
                 const data = await parseResponse(response);
                 if (response.ok && typeof data.access_token === "string") {
-                    inMemoryAccessToken = data.access_token;
+                    // In-memory only: hand the token to the shared session module
+                    // (static/js/session.js), never to web storage.
+                    window.DivarSession.setAccessToken(data.access_token);
                     sessionStorage.removeItem(PHONE_STORAGE_KEY);
                     form.hidden = true;
                     showFeedback(success, "ورود با موفقیت انجام شد. بخش فروشندگان هنوز آماده نشده است.");

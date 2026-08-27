@@ -1,7 +1,8 @@
-"""Public web tests for Phase 3 steps 2-9.
+"""Public web tests for Phase 3 steps 2-12.
 
 Cover public pages, login/OTP presentation, shared static assets, the shared
-visual-system vocabulary, visible keyboard focus, and existing API routers.
+visual-system vocabulary, visible keyboard focus, existing API routers, and
+the client-side session-restoration module.
 """
 
 from pathlib import Path
@@ -185,8 +186,9 @@ def test_auth_script_uses_only_existing_otp_endpoints_and_safe_storage():
     assert 'const PHONE_STORAGE_KEY = "divar_auth_phone"' in js
     assert "sessionStorage.setItem(PHONE_STORAGE_KEY, phoneNumber)" in js
     assert "sessionStorage.removeItem(PHONE_STORAGE_KEY)" in js
-    assert "let inMemoryAccessToken = null" in js
-    assert "inMemoryAccessToken = data.access_token" in js
+    # The token goes to the shared in-memory session store, never to web storage.
+    assert "window.DivarSession.setAccessToken(data.access_token)" in js
+    assert "inMemoryAccessToken" not in js
     assert "addEventListener" in js
     assert "textContent" in js
     assert "innerHTML" not in js
@@ -225,6 +227,63 @@ def test_login_pages_expose_no_auth_or_seller_secrets():
             "password",
         ):
             assert forbidden not in html
+
+
+def test_base_template_loads_shared_session_module_on_every_page():
+    with TestClient(app) as c:
+        for path in ("/", "/pricing", "/login", "/login/otp"):
+            assert 'src="/static/js/session.js"' in c.get(path).text
+
+
+def test_session_script_restores_session_with_one_refresh_one_retry_and_redirect():
+    with TestClient(app) as c:
+        response = c.get("/static/js/session.js")
+
+    js = response.text
+    assert response.status_code == 200
+    assert "javascript" in response.headers["content-type"]
+
+    # Session restoration: existing endpoints only, exactly one refresh call
+    # site, one retry, then the login redirect — no loops, no second attempt.
+    assert js.count('"/auth/refresh"') == 1
+    assert js.count('"/auth/logout"') == 1
+    assert 'method: "POST"' in js
+    assert 'window.location.assign("/login")' in js
+    assert "response.status !== 401" in js
+    # Single-flight refresh: concurrent 401s share one /auth/refresh call
+    # because the refresh token rotates.
+    assert "refreshInFlight" in js
+    # Authenticated calls attach the in-memory Bearer token.
+    assert '"Authorization", `Bearer ${accessToken}`' in js
+    assert 'credentials: "same-origin"' in js
+    assert "let accessToken = null" in js
+
+    for forbidden in (
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "setItem",
+        "innerHTML",
+        "console.",
+        "client_id",
+    ):
+        assert forbidden not in js
+
+
+def test_web_router_documents_client_side_protected_route_convention():
+    """No server-side HTML auth gate exists (refresh cookie path=/auth makes one
+    impossible); the reusable protection is session.js, documented in api/web.py."""
+    import inspect
+
+    import api.web
+
+    docstring = inspect.getdoc(api.web)
+    assert "path=/auth" in docstring
+    assert "session.js" in docstring
+    assert "get_current_client_id" in docstring
+    # No HTML route reads cookies — the web router never authenticates by cookie.
+    source = inspect.getsource(api.web)
+    assert "Cookie" not in source
 
 
 def test_temporary_probe_routes_and_templates_are_removed():
