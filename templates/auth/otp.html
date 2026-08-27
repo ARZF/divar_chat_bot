@@ -13,7 +13,7 @@
     </div>
   </header>
 
-  <form action="#" method="post" aria-describedby="otp-help" onsubmit="return false;">
+  <form data-auth-form="verify" aria-describedby="otp-help otp-feedback">
     <div class="field">
       <label for="otp-code">کد یک‌بارمصرف</label>
       <input id="otp-code" name="code" type="text" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]*"
@@ -22,7 +22,7 @@
       <p id="otp-error" class="error-text" role="alert" hidden></p>
     </div>
 
-    <button type="button" class="btn btn-primary" disabled aria-disabled="true">تأیید کد</button>
+    <button type="submit" class="btn btn-primary" disabled aria-disabled="true">تأیید کد</button>
   </form>
 
   <section id="otp-feedback" aria-labelledby="feedback-title" aria-live="polite" hidden>
@@ -30,8 +30,13 @@
     <p id="otp-expired" class="hint" hidden>کد ورود منقضی شده است.</p>
     <p id="otp-rate-limit" class="hint" hidden>درخواست‌های ورود بیش از حد مجاز است.</p>
     <p id="otp-retry" class="hint" hidden>برای دریافت کد جدید دوباره تلاش کنید.</p>
+    <button id="otp-retry-button" type="button" class="btn btn-sm" hidden>دریافت کد جدید</button>
     <p id="otp-loading" class="hint" hidden>در حال بررسی کد ورود...</p>
     <p id="otp-success" class="hint" hidden>کد ورود با موفقیت بررسی شد.</p>
   </section>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/auth.js"></script>
 {% endblock %}

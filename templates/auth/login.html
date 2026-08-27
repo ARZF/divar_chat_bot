@@ -13,7 +13,7 @@
     </div>
   </header>
 
-  <form action="#" method="post" aria-describedby="login-help" onsubmit="return false;">
+  <form data-auth-form="request" aria-describedby="login-help login-feedback">
     <div class="field">
       <label for="phone-number">شمارهٔ تلفن</label>
       <input id="phone-number" name="phone_number" type="tel" autocomplete="tel" inputmode="tel"
@@ -21,9 +21,14 @@
       <p id="login-help" class="hint">کد یک‌بارمصرف برای این شماره ارسال خواهد شد.</p>
     </div>
 
-    <button type="button" class="btn btn-primary" disabled aria-disabled="true">ارسال کد ورود</button>
+    <button type="submit" class="btn btn-primary" disabled aria-disabled="true">ارسال کد ورود</button>
+    <p id="login-feedback" class="hint" role="status" aria-live="polite" hidden></p>
   </form>
 
   <p><a class="btn" href="/oauth/start">ورود با دیوار</a></p>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/auth.js"></script>
 {% endblock %}

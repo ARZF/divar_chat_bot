@@ -113,7 +113,7 @@ def test_pricing_has_no_plan_or_payment_implication_or_seller_data():
         assert forbidden not in html
 
 
-def test_login_renders_safe_accessible_presentation_only():
+def test_login_loads_auth_script_and_submit_hooks():
     with TestClient(app) as c:
         response = c.get("/login")
 
@@ -125,15 +125,17 @@ def test_login_renders_safe_accessible_presentation_only():
     assert 'type="tel"' in html
     assert 'autocomplete="tel"' in html
     assert 'inputmode="tel"' in html
-    assert 'aria-describedby="login-help"' in html
-    assert 'type="button" class="btn btn-primary" disabled' in html
+    assert 'aria-describedby="login-help login-feedback"' in html
+    assert 'data-auth-form="request"' in html
+    assert 'type="submit" class="btn btn-primary" disabled' in html
+    assert 'id="login-feedback"' in html
+    assert 'aria-live="polite"' in html
     assert 'href="/oauth/start"' in html
-    assert 'action="#"' in html
-    assert 'onsubmit="return false;"' in html
-    assert "/auth/otp/request" not in html
+    assert 'src="/static/js/auth.js"' in html
+    assert "onsubmit=" not in html
 
 
-def test_otp_renders_safe_accessible_feedback_hooks():
+def test_otp_loads_auth_script_and_accessible_feedback_hooks():
     with TestClient(app) as c:
         response = c.get("/login/otp")
 
@@ -146,6 +148,7 @@ def test_otp_renders_safe_accessible_feedback_hooks():
     assert 'autocomplete="one-time-code"' in html
     assert 'inputmode="numeric"' in html
     assert 'aria-describedby="otp-help otp-error"' in html
+    assert 'data-auth-form="verify"' in html
     assert 'id="otp-error" class="error-text" role="alert" hidden' in html
     assert 'id="otp-feedback"' in html
     assert 'aria-labelledby="feedback-title"' in html
@@ -155,14 +158,52 @@ def test_otp_renders_safe_accessible_feedback_hooks():
         "otp-expired",
         "otp-rate-limit",
         "otp-retry",
+        "otp-retry-button",
         "otp-loading",
         "otp-success",
     ):
         assert f'id="{hook}"' in html
-    assert 'type="button" class="btn btn-primary" disabled' in html
-    assert 'action="#"' in html
-    assert 'onsubmit="return false;"' in html
-    assert "/auth/otp/verify" not in html
+    assert 'type="submit" class="btn btn-primary" disabled' in html
+    assert 'src="/static/js/auth.js"' in html
+    assert "onsubmit=" not in html
+
+
+def test_auth_script_uses_only_existing_otp_endpoints_and_safe_storage():
+    with TestClient(app) as c:
+        response = c.get("/static/js/auth.js")
+
+    js = response.text
+    assert response.status_code == 200
+    assert "javascript" in response.headers["content-type"]
+    assert 'postJSON("/auth/otp/request"' in js
+    assert 'postJSON("/auth/otp/verify"' in js
+    assert "response.status === 400" in js
+    assert "response.status === 422" in js
+    assert "response.status === 429" in js
+    assert "response.status === 503" in js
+    assert 'credentials: "same-origin"' in js
+    assert 'const PHONE_STORAGE_KEY = "divar_auth_phone"' in js
+    assert "sessionStorage.setItem(PHONE_STORAGE_KEY, phoneNumber)" in js
+    assert "sessionStorage.removeItem(PHONE_STORAGE_KEY)" in js
+    assert "let inMemoryAccessToken = null" in js
+    assert "inMemoryAccessToken = data.access_token" in js
+    assert "addEventListener" in js
+    assert "textContent" in js
+    assert "innerHTML" not in js
+    assert "localStorage" not in js
+    assert "document.cookie" not in js
+    assert "console." not in js
+    assert "client_id" not in js
+
+    for forbidden_storage in (
+        "setItem(\"access_token\"",
+        "setItem('access_token'",
+        "setItem(\"refresh_token\"",
+        "setItem('refresh_token'",
+        "setItem(\"code\"",
+        "setItem('code'",
+    ):
+        assert forbidden_storage not in js
 
 
 def test_login_pages_expose_no_auth_or_seller_secrets():
