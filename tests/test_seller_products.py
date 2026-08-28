@@ -1,15 +1,18 @@
-"""Tenant-scoped product API tests (Phase 3 steps 15-16).
+"""Tenant-scoped product API tests (Phase 3 steps 15-17).
 
 Covers the JWT gate (401 paths), two-tenant isolation on list/detail/mutations,
 normalized search semantics, pagination bounds/ordering, the non-leaking
 404 rule (cross-tenant is indistinguishable from nonexistent, §3.14), the
-tenant-scoped 409 on duplicate normalized names, and the lookup-cache
-refresh after every successful mutation.
+tenant-scoped 409 on duplicate normalized names, the lookup-cache
+refresh after every successful mutation, and the tenant-scoped spreadsheet
+import (§3.7.6) wrapping load_prices_to_db unchanged.
 """
 
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 
 import jwt as pyjwt
+import pandas as pd
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
@@ -900,3 +903,209 @@ def test_failed_mutation_leaves_cache_and_db_unchanged(client, two_tenants):
     assert price_lookup.get_all_matching_prices(seller_a_id, "تبلت لنوو") == [
         ("تبلت لنوو", 9_000_000)
     ]
+
+
+# --------------------------------------------------------------------------------------
+# Spreadsheet import (Phase 3 step 17) — thin wrapper over load_prices_to_db
+# --------------------------------------------------------------------------------------
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def xlsx_bytes(columns: dict[str, list]) -> bytes:
+    """Build a real .xlsx file with the given columns, e.g.
+    {"product": ["گوشی"], "price": [100]}. Values may include None (NaN price)."""
+    df = pd.DataFrame(columns)
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False)
+    return buffer.getvalue()
+
+
+def upload(client, token: int, filename: str, content: bytes):
+    return client.post(
+        "/api/v1/seller/products/import",
+        files={"file": (filename, content, XLSX_MIME)},
+        headers=auth(token),
+    )
+
+
+def test_import_requires_authorization_header(client):
+    response = client.post(
+        "/api/v1/seller/products/import",
+        files={"file": ("prices.xlsx", b"ignored", XLSX_MIME)},
+    )
+    assert response.status_code == 401
+
+
+def test_import_rejects_invalid_token(client):
+    response = client.post(
+        "/api/v1/seller/products/import",
+        files={"file": ("prices.xlsx", b"ignored", XLSX_MIME)},
+        headers={"Authorization": "Bearer not-a-jwt"},
+    )
+    assert response.status_code == 401
+
+
+def test_import_rejects_non_xlsx_filename(client, two_tenants):
+    seller_a_id, _ = two_tenants
+
+    for filename in ("prices.csv", "prices.xls", "prices", "prices.XLSX.bak"):
+        response = upload(client, seller_a_id, filename, b"whatever")
+        assert response.status_code == 400, filename
+
+
+def test_import_rejects_oversized_file_with_413(client, two_tenants):
+    """One byte over the 5 MiB cap → 413, checked before any parsing."""
+    seller_a_id, _ = two_tenants
+
+    response = upload(
+        client,
+        seller_a_id,
+        "prices.xlsx",
+        b"x" * (5 * 1024 * 1024 + 1),
+    )
+    assert response.status_code == 413
+
+    # At exactly the cap the size check passes (parsing then fails on the
+    # garbage bytes with 400, not 413/500 — proving the boundary).
+    boundary = upload(client, seller_a_id, "prices.xlsx", b"x" * (5 * 1024 * 1024))
+    assert boundary.status_code == 400
+
+
+def test_import_rejects_corrupt_xlsx_bytes_with_400_not_500(client, two_tenants):
+    seller_a_id, _ = two_tenants
+
+    response = upload(client, seller_a_id, "prices.xlsx", b"not a zip file at all")
+    assert response.status_code == 400
+    assert "readable" in response.json()["detail"]
+
+
+def test_import_rejects_missing_or_misnamed_columns_with_400(client, two_tenants):
+    """_parse_df's AttributeError path (surfacing as ValueError from
+    load_prices_to_db) must be a 400, never a 500."""
+    seller_a_id, _ = two_tenants
+
+    response = upload(
+        client,
+        seller_a_id,
+        "prices.xlsx",
+        xlsx_bytes({"name": ["گوشی"], "cost": [100]}),
+    )
+    assert response.status_code == 400
+    assert "Invalid file format" in response.json()["detail"]
+
+    # Seller's existing catalog is untouched by the failed import.
+    listing = client.get("/api/v1/seller/products", headers=auth(seller_a_id)).json()
+    assert listing["total"] == 5
+
+
+def test_import_replaces_catalog_and_returns_rows_loaded(client, two_tenants):
+    """The accepted replace-all semantics: A's 5 seeded rows are gone, exactly
+    the file's 2 rows remain — verified through the step-15 list endpoint."""
+    seller_a_id, _ = two_tenants
+
+    response = upload(
+        client,
+        seller_a_id,
+        "prices.xlsx",
+        xlsx_bytes(
+            {
+                "product": ["تبلت لنوو", "هدفون سونی"],
+                "price": [9_000_000, 2_500_000],
+            }
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "rows_loaded": 2}
+
+    listing = client.get("/api/v1/seller/products", headers=auth(seller_a_id)).json()
+    assert listing["total"] == 2
+    by_name = {i["item_name"]: i["price"] for i in listing["items"]}
+    assert by_name == {"تبلت لنوو": 9_000_000, "هدفون سونی": 2_500_000}
+    # Old rows really are gone (404 on a previously-owned id, search empty).
+    assert client.get(
+        "/api/v1/seller/products", params={"q": "old_model"}, headers=auth(seller_a_id)
+    ).json()["total"] == 0
+
+
+def test_import_is_tenant_scoped_and_refreshes_only_own_cache(client, two_tenants):
+    seller_a_id, seller_b_id = two_tenants
+
+    # A imports a new catalog; B imports its own.
+    response_a = upload(
+        client,
+        seller_a_id,
+        "prices.xlsx",
+        xlsx_bytes({"product": ["تبلت لنوو"], "price": [9_000_000]}),
+    )
+    response_b = upload(
+        client,
+        seller_b_id,
+        "prices.xlsx",
+        xlsx_bytes({"product": ["ساعت هوشمند"], "price": [4_000_000]}),
+    )
+    assert response_a.json()["rows_loaded"] == 1
+    assert response_b.json()["rows_loaded"] == 1
+
+    # B's DB rows were replaced by B's OWN import, never touched by A's.
+    listing_b = client.get("/api/v1/seller/products", headers=auth(seller_b_id)).json()
+    assert listing_b["total"] == 1
+    assert listing_b["items"][0]["item_name"] == "ساعت هوشمند"
+    # A's catalog contains only A's import.
+    listing_a = client.get("/api/v1/seller/products", headers=auth(seller_a_id)).json()
+    assert [i["item_name"] for i in listing_a["items"]] == ["تبلت لنوو"]
+
+    # load_prices_to_db's internal refresh_lookup_cache holds per tenant:
+    # each chatbot lookup sees exactly its own catalog.
+    assert price_lookup.get_all_matching_prices(seller_a_id, "لنوو") == [
+        ("تبلت لنوو", 9_000_000)
+    ]
+    assert price_lookup.get_all_matching_prices(seller_a_id, "ساعت") == []
+    assert price_lookup.get_all_matching_prices(seller_b_id, "ساعت") == [
+        ("ساعت هوشمند", 4_000_000)
+    ]
+    assert price_lookup.get_all_matching_prices(seller_b_id, "لنوو") == []
+
+
+def test_import_skips_invalid_price_rows_like_admin_upload(client, two_tenants):
+    """NaN and non-numeric prices are skipped by _parse_df (existing admin
+    behavior); only the valid rows load."""
+    seller_a_id, _ = two_tenants
+
+    response = upload(
+        client,
+        seller_a_id,
+        "prices.xlsx",
+        xlsx_bytes(
+            {
+                "product": ["گوشی نوکیا", "تبلت لنوو", "هدفون سونی"],
+                "price": [3_000_000, None, "cheap"],
+            }
+        ),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "rows_loaded": 1}
+    listing = client.get("/api/v1/seller/products", headers=auth(seller_a_id)).json()
+    assert [i["item_name"] for i in listing["items"]] == ["گوشی نوکیا"]
+
+
+def test_import_of_empty_sheet_clears_catalog_with_zero_rows(client, two_tenants):
+    """Replace-all edge: a sheet with only headers is a valid import that
+    loads 0 rows and leaves the catalog empty (maintainer-approved semantics)."""
+    seller_a_id, _ = two_tenants
+
+    response = upload(
+        client,
+        seller_a_id,
+        "prices.xlsx",
+        xlsx_bytes({"product": [], "price": []}),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "rows_loaded": 0}
+    assert client.get(
+        "/api/v1/seller/products", headers=auth(seller_a_id)
+    ).json()["total"] == 0

@@ -109,3 +109,15 @@ class ProductUpdateRequest(BaseModel):
         if self.item_name is None and self.price is None:
             raise ValueError("At least one of item_name or price must be provided")
         return self
+
+
+class ProductImportResponse(BaseModel):
+    """Result of `POST /api/v1/seller/products/import` (§3.7.6).
+
+    Same contract meaning as the admin upload (`{"status": "ok",
+    "rows_loaded": N}`), kept in the seller schema module so the seller API
+    does not depend on schemas/admin.py.
+    """
+
+    status: str
+    rows_loaded: int

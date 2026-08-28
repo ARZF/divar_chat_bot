@@ -7,9 +7,20 @@ form field, or request body.
 
 from __future__ import annotations
 
+import io
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+import pandas as pd
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -28,14 +39,20 @@ from schemas.seller import (
     PostRegisterResponse,
     ProductCreateRequest,
     ProductDetailResponse,
+    ProductImportResponse,
     ProductListItem,
     ProductListResponse,
     ProductUpdateRequest,
 )
-from services.price_lookup import normalize_text, refresh_lookup_cache
+from services.price_lookup import load_prices_to_db, normalize_text, refresh_lookup_cache
 
 router = APIRouter()
 logger = logging.getLogger("seller")
+
+# A 5 MiB xlsx of name/price pairs is tens of thousands of rows — far above
+# any real catalog — while bounding pandas parse time and memory (§3.14's
+# 413 case; the admin route has no such cap).
+IMPORT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 
 
 @router.post("/seller/posts", response_model=PostRegisterResponse)
@@ -323,3 +340,57 @@ async def delete_product(
     await refresh_lookup_cache(db, client_id)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/api/v1/seller/products/import",
+    response_model=ProductImportResponse,
+)
+async def import_products(
+    file: UploadFile = File(...),
+    client_id: int = Depends(get_current_client_id),
+    db: AsyncSession = Depends(get_db),
+) -> ProductImportResponse:
+    """Spreadsheet import for the authenticated seller (§3.7.6, §3.14).
+
+    A thin wrapper around the existing `load_prices_to_db` — the
+    transactional replace-all (this tenant's rows deleted, the file's rows
+    inserted) and the per-tenant cache refresh stay exactly there, unchanged.
+    Importing REPLACES the seller's whole catalog by design (maintainer-
+    approved). Adds the size cap the admin route lacks; parser and
+    schema/content failures are 400s, never 500s.
+    """
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(
+            status_code=400,
+            detail="Only .xlsx files are accepted",
+        )
+
+    contents = await file.read()
+    if len(contents) > IMPORT_MAX_FILE_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="File exceeds the 5 MB size limit",
+        )
+
+    try:
+        df = pd.read_excel(io.BytesIO(contents))
+    except Exception as e:
+        # Untrusted bytes: any parser failure (corrupt zip, wrong format, ...)
+        # is a client error, never a 500.
+        raise HTTPException(
+            status_code=400,
+            detail="File is not a readable .xlsx spreadsheet",
+        ) from e
+
+    try:
+        rows_loaded = await load_prices_to_db(db, client_id, df)
+    except (ValueError, AttributeError) as e:
+        # ValueError: missing required column (from _parse_df's AttributeError)
+        # or content validation failure inside load_prices_to_db.
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file format. {e}",
+        ) from e
+
+    return ProductImportResponse(status="ok", rows_loaded=rows_loaded)
