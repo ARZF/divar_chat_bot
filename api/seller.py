@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,11 +20,16 @@ from models.client import Client
 from models.conversation import Conversation
 from models.post import Post
 from models.post_conversation import PostConversation
+from models.product import Product
 from schemas.seller import (
     DashboardSummaryResponse,
     PostRegisterRequest,
     PostRegisterResponse,
+    ProductDetailResponse,
+    ProductListItem,
+    ProductListResponse,
 )
+from services.price_lookup import normalize_text
 
 router = APIRouter()
 logger = logging.getLogger("seller")
@@ -100,4 +105,89 @@ async def dashboard_summary(
         post_count=await _count(Post),
         conversation_count=await _count(Conversation),
         post_conversation_count=await _count(PostConversation),
+    )
+
+
+@router.get("/api/v1/seller/products", response_model=ProductListResponse)
+async def list_products(
+    q: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    client_id: int = Depends(get_current_client_id),
+    db: AsyncSession = Depends(get_db),
+) -> ProductListResponse:
+    """Paginated, tenant-scoped product list (§3.7.1).
+
+    Search mirrors `get_all_matching_prices` semantics but as a DB query: `q`
+    is normalized with `normalize_text` and substring-matched against
+    `Product.normalized_name`. Ordering is `updated_at DESC, id DESC` (newest
+    first, stable tie-break). Every query filters on the JWT-derived
+    `client_id` first; the response never exposes `normalized_name`.
+    """
+    conditions = [Product.client_id == client_id]
+    if q:
+        normalized_q = normalize_text(q)
+        if normalized_q:
+            conditions.append(
+                Product.normalized_name.contains(normalized_q, autoescape=True)
+            )
+
+    total = (
+        await db.execute(select(func.count()).select_from(Product).where(*conditions))
+    ).scalar_one()
+
+    rows = (
+        await db.execute(
+            select(Product)
+            .where(*conditions)
+            .order_by(Product.updated_at.desc(), Product.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).scalars().all()
+
+    return ProductListResponse(
+        items=[
+            ProductListItem(
+                id=row.id,
+                item_name=row.item_name,
+                price=row.price,
+                updated_at=row.updated_at,
+            )
+            for row in rows
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+        page_count=(total + page_size - 1) // page_size,
+    )
+
+
+@router.get(
+    "/api/v1/seller/products/{product_id}",
+    response_model=ProductDetailResponse,
+)
+async def get_product(
+    product_id: int,
+    client_id: int = Depends(get_current_client_id),
+    db: AsyncSession = Depends(get_db),
+) -> ProductDetailResponse:
+    """Single tenant-scoped product lookup (§3.7.1, §3.14).
+
+    The lookup is always `id AND client_id` — never by id alone. Missing and
+    cross-tenant both return the same non-leaking 404.
+    """
+    row = (
+        await db.execute(
+            select(Product).where(Product.id == product_id, Product.client_id == client_id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    return ProductDetailResponse(
+        id=row.id,
+        item_name=row.item_name,
+        price=row.price,
+        updated_at=row.updated_at,
     )

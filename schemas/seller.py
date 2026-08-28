@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field, field_validator
 
 # `posts.post_token` is String(20) — enforce the same limit here so an
@@ -48,3 +50,34 @@ class DashboardSummaryResponse(BaseModel):
     post_count: int
     conversation_count: int
     post_conversation_count: int
+
+
+class ProductListItem(BaseModel):
+    """One seller-facing product row (§3.7.1).
+
+    `normalized_name` and `client_id` are internal — never serialized to the seller.
+    """
+
+    id: int
+    item_name: str
+    price: int
+    updated_at: datetime
+
+
+class ProductListResponse(BaseModel):
+    """Paginated product list with the paging metadata the UI needs."""
+
+    items: list[ProductListItem]
+    page: int
+    page_size: int
+    total: int
+    page_count: int
+
+
+class ProductDetailResponse(BaseModel):
+    """Single product response — same seller-facing fields as the list item."""
+
+    id: int
+    item_name: str
+    price: int
+    updated_at: datetime
