@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # `posts.post_token` is String(20) — enforce the same limit here so an
 # over-length token fails validation with a clean 422 instead of a raw DB error.
@@ -81,3 +81,31 @@ class ProductDetailResponse(BaseModel):
     item_name: str
     price: int
     updated_at: datetime
+
+
+class ProductCreateRequest(BaseModel):
+    """Body for `POST /api/v1/seller/products` (§3.7.3).
+
+    Only the seller-visible fields are accepted — `normalized_name` is derived
+    server-side and `client_id` comes from the JWT, never the body. Length and
+    price bounds mirror the `products` columns (String(500), Integer).
+    """
+
+    item_name: str = Field(min_length=1, max_length=500)
+    price: int = Field(ge=0)
+
+
+class ProductUpdateRequest(BaseModel):
+    """Body for `PATCH /api/v1/seller/products/{product_id}` (§3.7.4).
+
+    Both fields optional, but at least one must be present (422 otherwise).
+    """
+
+    item_name: str | None = Field(default=None, min_length=1, max_length=500)
+    price: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _require_at_least_one_field(self) -> "ProductUpdateRequest":
+        if self.item_name is None and self.price is None:
+            raise ValueError("At least one of item_name or price must be provided")
+        return self

@@ -1,8 +1,10 @@
-"""Tenant-scoped product read API tests (Phase 3 step 15).
+"""Tenant-scoped product API tests (Phase 3 steps 15-16).
 
-Covers the JWT gate (401 paths), two-tenant isolation on both list and detail,
-normalized search semantics, pagination bounds/ordering, and the non-leaking
-404 rule (cross-tenant is indistinguishable from nonexistent, §3.14).
+Covers the JWT gate (401 paths), two-tenant isolation on list/detail/mutations,
+normalized search semantics, pagination bounds/ordering, the non-leaking
+404 rule (cross-tenant is indistinguishable from nonexistent, §3.14), the
+tenant-scoped 409 on duplicate normalized names, and the lookup-cache
+refresh after every successful mutation.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -11,14 +13,18 @@ import jwt as pyjwt
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+import services.price_lookup as price_lookup
+from api.seller import update_product
 from config import settings
 from db.session import get_db
 from main import app
 from models.client import Client
 from models.product import Product
+from schemas.seller import ProductUpdateRequest
 
 
 def make_access_token(client_id: int) -> str:
@@ -68,6 +74,9 @@ async def two_tenants(session_factory):
       3. گوشی سامسونگ گلکسی  (08-20 10:00)
       4. گوشی آیفون ۱۲       (08-10 12:00)
       5. old_model           (08-01 08:00)
+
+    normalized_name values are exactly normalize_text(item_name) so duplicate
+    and conflict tests collide the way production rows would.
     """
     async with session_factory() as db:
         seller_a = Client(phone_number="09120000001")
@@ -79,7 +88,7 @@ async def two_tenants(session_factory):
             Product(
                 client_id=seller_a.id,
                 item_name="گوشی سامسونگ گلکسی",
-                normalized_name="samsung galaxy گوشی",
+                normalized_name="گوشی samsung galaxy",
                 price=25_000_000,
                 updated_at=ts(20, 10),
             ),
@@ -111,11 +120,11 @@ async def two_tenants(session_factory):
                 price=1_000,
                 updated_at=ts(1, 8),
             ),
-            # B's row: same normalized_name as A's "samsung galaxy گوشی".
+            # B's row: same normalized_name as A's "گوشی samsung galaxy".
             Product(
                 client_id=seller_b.id,
                 item_name="گوشی سامسونگ گلکسی",
-                normalized_name="samsung galaxy گوشی",
+                normalized_name="گوشی samsung galaxy",
                 price=99_999_999,
                 updated_at=ts(26, 6),
             ),
@@ -138,6 +147,15 @@ def client(session_factory):
 
 def product_ids(body: dict) -> list[int]:
     return [item["id"] for item in body["items"]]
+
+
+@pytest.fixture(autouse=True)
+def clear_lookup_cache():
+    """The lookup cache is module-level state shared with the chatbot; keep
+    tests independent of each other's mutations."""
+    price_lookup._cache.clear()
+    yield
+    price_lookup._cache.clear()
 
 
 # --------------------------------------------------------------------------------------
@@ -466,3 +484,419 @@ def test_list_for_unknown_client_returns_honest_empty_list(client):
         "total": 0,
         "page_count": 0,
     }
+
+
+# --------------------------------------------------------------------------------------
+# Mutations (Phase 3 step 16)
+# --------------------------------------------------------------------------------------
+
+def own_product_id(client, client_id: int, item_name: str) -> int:
+    listing = client.get("/api/v1/seller/products", headers=auth(client_id)).json()
+    return next(i["id"] for i in listing["items"] if i["item_name"] == item_name)
+
+
+def foreign_product_id(client, client_id: int) -> int:
+    listing = client.get("/api/v1/seller/products", headers=auth(client_id)).json()
+    return listing["items"][0]["id"]
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("POST", "/api/v1/seller/products"),
+        ("PATCH", "/api/v1/seller/products/1"),
+        ("DELETE", "/api/v1/seller/products/1"),
+    ],
+)
+def test_mutations_require_authorization_header(client, method, path):
+    response = client.request(method, path, json={})
+    assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("POST", "/api/v1/seller/products"),
+        ("PATCH", "/api/v1/seller/products/1"),
+        ("DELETE", "/api/v1/seller/products/1"),
+    ],
+)
+def test_mutations_reject_invalid_token(client, method, path):
+    response = client.request(
+        method, path, json={}, headers={"Authorization": "Bearer not-a-jwt"}
+    )
+    assert response.status_code == 401
+
+
+# ---- create ---------------------------------------------------------------------------
+
+def test_create_returns_201_with_detail_shape_and_normalizes_name(client, two_tenants):
+    seller_a_id, _ = two_tenants
+
+    response = client.post(
+        "/api/v1/seller/products",
+        json={"item_name": "گوشی شیائومی ردمی", "price": 18_500_000},
+        headers=auth(seller_a_id),
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert set(body) == {"id", "item_name", "price", "updated_at"}
+    assert body["item_name"] == "گوشی شیائومی ردمی"
+    assert body["price"] == 18_500_000
+    # Server-derived normalized_name is searchable ("شیائومی" -> "xiaomi").
+    search = client.get(
+        "/api/v1/seller/products", params={"q": "شیائومی"}, headers=auth(seller_a_id)
+    ).json()
+    assert search["total"] == 1
+    assert search["items"][0]["id"] == body["id"]
+    assert "normalized_name" not in body
+
+
+def test_create_rejects_invalid_bodies(client, two_tenants):
+    seller_a_id, _ = two_tenants
+
+    for payload in (
+        {},
+        {"item_name": ""},
+        {"item_name": "x" * 501},
+        {"price": 100},
+        {"item_name": "گوشی", "price": -1},
+        {"item_name": "گوشی"},
+    ):
+        response = client.post(
+            "/api/v1/seller/products", json=payload, headers=auth(seller_a_id)
+        )
+        assert response.status_code == 422, payload
+
+
+def test_create_ignores_client_id_and_normalized_name_in_body(client, two_tenants):
+    """Extra body fields cannot steer tenant or the derived normalization."""
+    seller_a_id, seller_b_id = two_tenants
+
+    response = client.post(
+        "/api/v1/seller/products",
+        json={
+            "item_name": "تبلت لنوو",
+            "price": 9_000_000,
+            "client_id": seller_b_id,
+            "normalized_name": "fabricated",
+        },
+        headers=auth(seller_a_id),
+    )
+
+    assert response.status_code == 201
+    # Belongs to A (visible in A's list), never to B.
+    listing_a = client.get("/api/v1/seller/products", headers=auth(seller_a_id)).json()
+    assert any(i["item_name"] == "تبلت لنوو" for i in listing_a["items"])
+    listing_b = client.get("/api/v1/seller/products", headers=auth(seller_b_id)).json()
+    assert not any(i["item_name"] == "تبلت لنوو" for i in listing_b["items"])
+    # The fabricated normalized_name was ignored: search by the real
+    # normalization ("لنوو" -> "lenovo") finds it, "fabricated" does not.
+    assert client.get(
+        "/api/v1/seller/products", params={"q": "لنوو"}, headers=auth(seller_a_id)
+    ).json()["total"] == 1
+    assert client.get(
+        "/api/v1/seller/products", params={"q": "fabricated"}, headers=auth(seller_a_id)
+    ).json()["total"] == 0
+
+
+def test_create_duplicate_normalized_name_in_same_tenant_returns_409(client, two_tenants):
+    seller_a_id, _ = two_tenants
+    existing_id = own_product_id(client, seller_a_id, "گوشی سامسونگ گلکسی")
+
+    # Different display name, same normalization: "موبایل" is a word synonym
+    # of "گوشی", so this normalizes to the stored "گوشی samsung galaxy".
+    response = client.post(
+        "/api/v1/seller/products",
+        json={"item_name": "موبایل سامسونگ گلکسی", "price": 1},
+        headers=auth(seller_a_id),
+    )
+
+    assert response.status_code == 409
+    # The conflicting product's id must not leak.
+    assert str(existing_id) not in response.text
+    assert response.json() == {"detail": "A product with this name already exists in your catalog"}
+
+
+def test_create_same_normalized_name_in_other_tenant_succeeds(client, two_tenants):
+    """UNIQUE(client_id, normalized_name) is per-tenant: B may create a name
+    A already owns."""
+    seller_a_id, seller_b_id = two_tenants
+
+    response = client.post(
+        "/api/v1/seller/products",
+        json={"item_name": "گوشی آیفون ۱۲", "price": 45_000_000},
+        headers=auth(seller_b_id),
+    )
+
+    assert response.status_code == 201
+    listing_b = client.get("/api/v1/seller/products", headers=auth(seller_b_id)).json()
+    assert listing_b["total"] == 2
+
+
+# ---- update ---------------------------------------------------------------------------
+
+def test_patch_updates_price_and_renames_with_renormalization(client, two_tenants):
+    seller_a_id, _ = two_tenants
+
+    rename = client.patch(
+        f"/api/v1/seller/products/{own_product_id(client, seller_a_id, 'کیف گوشی')}",
+        json={"item_name": "کاور گوشی"},
+        headers=auth(seller_a_id),
+    )
+    assert rename.status_code == 200
+    assert rename.json()["item_name"] == "کاور گوشی"
+
+    # Old normalized name no longer matches; the new one does.
+    assert client.get(
+        "/api/v1/seller/products", params={"q": "کیف"}, headers=auth(seller_a_id)
+    ).json()["total"] == 0
+    assert client.get(
+        "/api/v1/seller/products", params={"q": "کاور"}, headers=auth(seller_a_id)
+    ).json()["total"] == 1
+
+    reprice = client.patch(
+        f"/api/v1/seller/products/{rename.json()['id']}",
+        json={"price": 250_000},
+        headers=auth(seller_a_id),
+    )
+    assert reprice.status_code == 200
+    assert reprice.json()["price"] == 250_000
+    assert reprice.json()["item_name"] == "کاور گوشی"
+
+
+@pytest.mark.asyncio
+async def test_patch_updates_updated_at_but_not_created_at(session_factory, two_tenants):
+    """Direct endpoint call (single event loop, shared StaticPool connection):
+    a real change must touch updated_at via the model's onupdate and leave
+    created_at alone."""
+    seller_a_id, _ = two_tenants
+
+    def as_utc(dt: datetime) -> datetime:
+        # SQLite returns naive datetimes while the model's onupdate produces
+        # tz-aware ones — normalize before comparing.
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+    async with session_factory() as db:
+        row = (
+            await db.execute(
+                select(Product).where(
+                    Product.client_id == seller_a_id,
+                    Product.normalized_name == "کیف گوشی",
+                )
+            )
+        ).scalar_one()
+        original_created_at, original_updated_at = row.created_at, row.updated_at
+
+        result = await update_product(
+            row.id,
+            ProductUpdateRequest(price=999_999),
+            client_id=seller_a_id,
+            db=db,
+        )
+
+        assert result.price == 999_999
+
+        fresh = (
+            await db.execute(select(Product).where(Product.id == row.id))
+        ).scalar_one()
+        assert as_utc(fresh.created_at) == as_utc(original_created_at)
+        assert as_utc(fresh.updated_at) > as_utc(original_updated_at)
+
+
+def test_patch_rename_to_own_current_name_does_not_409(client, two_tenants):
+    seller_a_id, _ = two_tenants
+    product_id = own_product_id(client, seller_a_id, "کیف گوشی")
+
+    # Identical item_name, and a synonym that normalizes to the same key.
+    for new_name in ("کیف گوشی", "کیف موبایل"):
+        response = client.patch(
+            f"/api/v1/seller/products/{product_id}",
+            json={"item_name": new_name},
+            headers=auth(seller_a_id),
+        )
+        assert response.status_code == 200, new_name
+
+
+def test_patch_rename_conflict_returns_409_without_conflicting_id(client, two_tenants):
+    seller_a_id, _ = two_tenants
+    product_id = own_product_id(client, seller_a_id, "کیف گوشی")
+    conflicting_id = own_product_id(client, seller_a_id, "گوشی سامسونگ گلکسی")
+
+    response = client.patch(
+        f"/api/v1/seller/products/{product_id}",
+        json={"item_name": "گوشی سامسونگ گلکسی"},
+        headers=auth(seller_a_id),
+    )
+
+    assert response.status_code == 409
+    assert str(conflicting_id) not in response.text
+    assert str(product_id) not in response.text
+
+
+def test_patch_requires_at_least_one_field(client, two_tenants):
+    seller_a_id, _ = two_tenants
+
+    response = client.patch(
+        f"/api/v1/seller/products/{own_product_id(client, seller_a_id, 'کیف گوشی')}",
+        json={},
+        headers=auth(seller_a_id),
+    )
+    assert response.status_code == 422
+
+
+def test_patch_rejects_invalid_values(client, two_tenants):
+    seller_a_id, _ = two_tenants
+    product_id = own_product_id(client, seller_a_id, "کیف گوشی")
+
+    for payload in ({"item_name": ""}, {"item_name": "x" * 501}, {"price": -1}):
+        response = client.patch(
+            f"/api/v1/seller/products/{product_id}",
+            json=payload,
+            headers=auth(seller_a_id),
+        )
+        assert response.status_code == 422, payload
+
+
+def test_patch_cross_tenant_and_nonexistent_share_the_same_404(client, two_tenants):
+    seller_a_id, seller_b_id = two_tenants
+    foreign_id = foreign_product_id(client, seller_b_id)
+
+    cross_tenant = client.patch(
+        f"/api/v1/seller/products/{foreign_id}",
+        json={"price": 1},
+        headers=auth(seller_a_id),
+    )
+    nonexistent = client.patch(
+        "/api/v1/seller/products/999999",
+        json={"price": 1},
+        headers=auth(seller_a_id),
+    )
+
+    assert cross_tenant.status_code == 404
+    assert nonexistent.status_code == 404
+    assert cross_tenant.json() == nonexistent.json()
+    # B's row is untouched.
+    listing_b = client.get("/api/v1/seller/products", headers=auth(seller_b_id)).json()
+    assert listing_b["items"][0]["price"] == 99_999_999
+
+
+# ---- delete ---------------------------------------------------------------------------
+
+def test_delete_removes_product_and_returns_204_with_no_body(client, two_tenants):
+    seller_a_id, _ = two_tenants
+    product_id = own_product_id(client, seller_a_id, "old_model")
+
+    response = client.delete(
+        f"/api/v1/seller/products/{product_id}", headers=auth(seller_a_id)
+    )
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert client.get(
+        f"/api/v1/seller/products/{product_id}", headers=auth(seller_a_id)
+    ).status_code == 404
+    # The other rows survive.
+    assert client.get(
+        "/api/v1/seller/products", headers=auth(seller_a_id)
+    ).json()["total"] == 4
+    # Deleting again is the same non-leaking 404.
+    assert client.delete(
+        f"/api/v1/seller/products/{product_id}", headers=auth(seller_a_id)
+    ).status_code == 404
+
+
+def test_delete_cross_tenant_and_nonexistent_share_the_same_404(client, two_tenants):
+    seller_a_id, seller_b_id = two_tenants
+    foreign_id = foreign_product_id(client, seller_b_id)
+
+    cross_tenant = client.delete(
+        f"/api/v1/seller/products/{foreign_id}", headers=auth(seller_a_id)
+    )
+    nonexistent = client.delete(
+        "/api/v1/seller/products/999999", headers=auth(seller_a_id)
+    )
+
+    assert cross_tenant.status_code == 404
+    assert nonexistent.status_code == 404
+    assert cross_tenant.json() == nonexistent.json()
+    # B's row still exists.
+    assert client.get(
+        "/api/v1/seller/products", headers=auth(seller_b_id)
+    ).json()["total"] == 1
+
+
+# ---- lookup-cache refresh after every successful mutation -----------------------------
+
+def test_create_refreshes_lookup_cache_for_own_tenant_only(client, two_tenants):
+    seller_a_id, seller_b_id = two_tenants
+
+    client.post(
+        "/api/v1/seller/products",
+        json={"item_name": "گوشی شیائومی ردمی", "price": 18_500_000},
+        headers=auth(seller_a_id),
+    )
+
+    # Chatbot-style lookup sees the new row immediately, without a restart.
+    assert price_lookup.get_all_matching_prices(seller_a_id, "شیائومی") == [
+        ("گوشی شیائومی ردمی", 18_500_000)
+    ]
+    # The cache entry is per-tenant: B's lookup does not see A's new product.
+    assert price_lookup.get_all_matching_prices(seller_b_id, "شیائومی") == []
+
+
+def test_update_refreshes_lookup_cache(client, two_tenants):
+    seller_a_id, _ = two_tenants
+
+    client.patch(
+        f"/api/v1/seller/products/{own_product_id(client, seller_a_id, 'کیف گوشی')}",
+        json={"item_name": "کاور گوشی", "price": 250_000},
+        headers=auth(seller_a_id),
+    )
+
+    assert price_lookup.get_all_matching_prices(seller_a_id, "کاور گوشی") == [
+        ("کاور گوشی", 250_000)
+    ]
+    assert price_lookup.get_all_matching_prices(seller_a_id, "کیف گوشی") == []
+
+
+def test_delete_refreshes_lookup_cache(client, two_tenants):
+    seller_a_id, _ = two_tenants
+
+    client.delete(
+        f"/api/v1/seller/products/{own_product_id(client, seller_a_id, 'old_model')}",
+        headers=auth(seller_a_id),
+    )
+
+    assert price_lookup.get_all_matching_prices(seller_a_id, "old_model") == []
+
+
+def test_failed_mutation_leaves_cache_and_db_unchanged(client, two_tenants):
+    """A 409 create must not leave a half-written row or a stale cache entry:
+    first warm the cache with a successful create, then attempt the duplicate."""
+    seller_a_id, _ = two_tenants
+
+    created = client.post(
+        "/api/v1/seller/products",
+        json={"item_name": "تبلت لنوو", "price": 9_000_000},
+        headers=auth(seller_a_id),
+    )
+    assert created.status_code == 201
+
+    duplicate = client.post(
+        "/api/v1/seller/products",
+        json={"item_name": "تبلت لنوو", "price": 1},
+        headers=auth(seller_a_id),
+    )
+    assert duplicate.status_code == 409
+
+    listing = client.get(
+        "/api/v1/seller/products", headers=auth(seller_a_id)
+    ).json()
+    assert listing["total"] == 6
+    # The cache still holds exactly one entry for that name — the original
+    # price, not the duplicate's.
+    assert price_lookup.get_all_matching_prices(seller_a_id, "تبلت لنوو") == [
+        ("تبلت لنوو", 9_000_000)
+    ]

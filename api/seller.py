@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import get_current_client_id
@@ -25,11 +26,13 @@ from schemas.seller import (
     DashboardSummaryResponse,
     PostRegisterRequest,
     PostRegisterResponse,
+    ProductCreateRequest,
     ProductDetailResponse,
     ProductListItem,
     ProductListResponse,
+    ProductUpdateRequest,
 )
-from services.price_lookup import normalize_text
+from services.price_lookup import normalize_text, refresh_lookup_cache
 
 router = APIRouter()
 logger = logging.getLogger("seller")
@@ -191,3 +194,132 @@ async def get_product(
         price=row.price,
         updated_at=row.updated_at,
     )
+
+
+@router.post(
+    "/api/v1/seller/products",
+    response_model=ProductDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_product(
+    body: ProductCreateRequest,
+    client_id: int = Depends(get_current_client_id),
+    db: AsyncSession = Depends(get_db),
+) -> ProductDetailResponse:
+    """Create a product for the authenticated seller (§3.7.3, §3.14).
+
+    `normalized_name` is derived server-side via `normalize_text` — never
+    trusted from the body. A UNIQUE(client_id, normalized_name) collision is
+    a tenant-scoped 409 whose body does not reveal the conflicting product's
+    id. The lookup cache is refreshed on every success so chatbot lookups
+    see the new row immediately.
+    """
+    product = Product(
+        client_id=client_id,
+        item_name=body.item_name,
+        normalized_name=normalize_text(body.item_name),
+        price=body.price,
+    )
+    db.add(product)
+    try:
+        # flush surfaces the UNIQUE violation (and populates id/timestamps)
+        # before the commit, so rollback leaves no half-written state.
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A product with this name already exists in your catalog",
+        )
+    await db.commit()
+    await refresh_lookup_cache(db, client_id)
+
+    return ProductDetailResponse(
+        id=product.id,
+        item_name=product.item_name,
+        price=product.price,
+        updated_at=product.updated_at,
+    )
+
+
+async def _get_owned_product(
+    db: AsyncSession, client_id: int, product_id: int
+) -> Product:
+    """Fetch a product by id AND client_id, or raise the non-leaking 404.
+
+    Never look up by id alone: missing and cross-tenant are the same 404 (§3.14).
+    """
+    row = (
+        await db.execute(
+            select(Product).where(Product.id == product_id, Product.client_id == client_id)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return row
+
+
+@router.patch(
+    "/api/v1/seller/products/{product_id}",
+    response_model=ProductDetailResponse,
+)
+async def update_product(
+    product_id: int,
+    body: ProductUpdateRequest,
+    client_id: int = Depends(get_current_client_id),
+    db: AsyncSession = Depends(get_db),
+) -> ProductDetailResponse:
+    """Update item name and/or price of the seller's own product (§3.7.4).
+
+    A changed item_name re-derives `normalized_name` server-side; the
+    UNIQUE(client_id, normalized_name) constraint inherently excludes this
+    row's own current pair, so renaming to the same name does not 409.
+    `updated_at` is maintained by the model's `onupdate`. Cache is refreshed
+    on every success.
+    """
+    product = await _get_owned_product(db, client_id, product_id)
+
+    if body.item_name is not None:
+        product.item_name = body.item_name
+        product.normalized_name = normalize_text(body.item_name)
+    if body.price is not None:
+        product.price = body.price
+
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A product with this name already exists in your catalog",
+        )
+    await db.commit()
+    await refresh_lookup_cache(db, client_id)
+
+    return ProductDetailResponse(
+        id=product.id,
+        item_name=product.item_name,
+        price=product.price,
+        updated_at=product.updated_at,
+    )
+
+
+@router.delete(
+    "/api/v1/seller/products/{product_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_product(
+    product_id: int,
+    client_id: int = Depends(get_current_client_id),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Delete the seller's own product (§3.7.5). 204, no body — matching the
+    read endpoints' JSON-only conventions (no confirmation payload). The cache
+    is refreshed on every success so chatbot lookups stop matching the row."""
+    product = await _get_owned_product(db, client_id, product_id)
+
+    await db.delete(product)
+    await db.commit()
+    await refresh_lookup_cache(db, client_id)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
