@@ -92,6 +92,11 @@
       resolve/persist before the send, reopen a session only for the final commit of the
       bot's reply + state update). Needs its own scoped task — touches transaction
       boundaries around dedup-insert, history load, and the final `db.commit()`.
+- [ ] `/admin/upload-prices` returns an unhandled 500 on a corrupt/non-xlsx
+      file with a valid extension (pandas parse failure not caught). The
+      new `/api/v1/seller/products/import` (step 17) fixed this for its own
+      route but the legacy admin endpoint was deliberately left untouched
+      per the phase-3 execution scope.
 
 ### Authentication
 
