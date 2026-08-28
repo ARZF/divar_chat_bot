@@ -75,3 +75,18 @@ async def dashboard(request: Request) -> HTMLResponse:
     tenant-scoped data via the JSON summary API.
     """
     return templates.TemplateResponse(request, "dashboard/dashboard.html")
+
+
+@router.get("/dashboard/products", response_class=HTMLResponse)
+async def dashboard_products(request: Request) -> HTMLResponse:
+    """Render the product management page (§3.7.2).
+
+    Same step 12 convention: the shell renders anonymously — no product data,
+    no auth — and static/js/products.js loads everything client-side through
+    the tenant-scoped JSON APIs from steps 15-17.
+    """
+    return templates.TemplateResponse(
+        request,
+        "dashboard/products.html",
+        {"dashboard_nav_active": "products"},
+    )

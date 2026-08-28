@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+
+{% block title %}مدیریت محصولات | دستیار فروش دیوار{% endblock %}
+
+{% block content %}
+<div class="container dashboard-layout">
+  {% include "partials/dashboard_nav.html" %}
+
+  <div class="dashboard-main">
+    <header class="page-header" aria-labelledby="products-title">
+      <div>
+        <h1 id="products-title">مدیریت محصولات</h1>
+        <p class="page-title-note">فهرست قیمت محصولات شما؛ داده‌ها پس از ورود بارگذاری می‌شود.</p>
+      </div>
+      <button type="button" class="btn" data-products-logout>خروج از حساب</button>
+    </header>
+
+    <div id="products-loading" class="state state-loading">در حال بارگذاری محصولات…</div>
+
+    <div id="products-error" class="alert alert-error" role="alert" hidden>
+      <div>
+        <p id="products-error-text">بارگذاری محصولات انجام نشد.</p>
+        <p><a href="/login">بازگشت به صفحهٔ ورود</a></p>
+      </div>
+    </div>
+
+    <div id="products-data" hidden>
+      <div class="toolbar">
+        <form id="product-search-form" class="toolbar-search" role="search">
+          <input
+            type="search"
+            id="product-search"
+            aria-label="جستجوی محصول"
+            placeholder="جستجو بر اساس نام محصول…"
+            autocomplete="off"
+          >
+        </form>
+        <button type="button" class="btn" id="product-add-button" aria-expanded="false" aria-controls="product-form">افزودن محصول</button>
+        <button type="button" class="btn" id="import-toggle" aria-expanded="false" aria-controls="import-section">ورود از فایل اکسل</button>
+      </div>
+
+      <form id="product-form" hidden>
+        <h2 id="product-form-title">افزودن محصول</h2>
+        <div class="field">
+          <label for="product-name">نام محصول</label>
+          <input type="text" id="product-name" maxlength="500" required>
+        </div>
+        <div class="field">
+          <label for="product-price">قیمت (تومان)</label>
+          <input type="number" id="product-price" min="0" step="1" required>
+          <p class="hint">قیمت را به تومان و بدون جداکننده وارد کنید.</p>
+        </div>
+        <div id="product-form-error" class="alert alert-error" role="alert" hidden>
+          <p></p>
+        </div>
+        <div class="toolbar">
+          <button type="submit" class="btn btn-primary" id="product-form-submit">افزودن</button>
+          <button type="button" class="btn" id="product-form-cancel">انصراف</button>
+        </div>
+      </form>
+
+      <section id="import-section" hidden aria-labelledby="import-heading">
+        <h2 id="import-heading">ورود از فایل اکسل</h2>
+        <div class="alert alert-warning">
+          <p>
+            <strong>هشدار جایگزینی کامل فهرست.</strong>
+            ورود فایل، همهٔ محصولات فعلی شما را حذف و فهرست را با محتوای فایل
+            جایگزین می‌کند. این کار بازگشت ندارد.
+          </p>
+        </div>
+        <form id="import-form">
+          <div class="field">
+            <label for="import-file">فایل اکسل</label>
+            <input type="file" id="import-file" accept=".xlsx" required>
+            <p class="hint">
+              فقط فایل‌های اکسل با پسوند <span class="num">xlsx.</span> پذیرفته
+              می‌شوند؛ فایل باید ستون‌های product و price را داشته باشد و
+              حداکثر ۵ مگابایت باشد.
+            </p>
+          </div>
+          <div id="import-error" class="alert alert-error" role="alert" hidden>
+            <p></p>
+          </div>
+          <div id="import-feedback" class="alert alert-success" role="status" hidden>
+            <p></p>
+          </div>
+          <div class="toolbar">
+            <button type="submit" class="btn btn-primary" id="import-submit">ورود و جایگزینی فهرست</button>
+            <button type="button" class="btn" id="import-cancel">بستن</button>
+          </div>
+        </form>
+      </section>
+
+      <div class="table-wrap" id="products-table-wrap">
+        <table id="products-table" class="table-stack">
+          <thead>
+            <tr>
+              <th scope="col">نام محصول</th>
+              <th scope="col" class="num">قیمت (تومان)</th>
+              <th scope="col">آخرین به‌روزرسانی</th>
+              <th scope="col">عملیات</th>
+            </tr>
+          </thead>
+          <tbody id="products-tbody"></tbody>
+        </table>
+      </div>
+
+      <div id="products-empty" class="state" hidden>
+        <p id="products-empty-text">هنوز محصولی ثبت نشده است.</p>
+      </div>
+
+      <nav id="products-pagination" class="pagination" aria-label="صفحه‌بندی محصولات" hidden></nav>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/products.js"></script>
+{% endblock %}

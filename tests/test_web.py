@@ -478,3 +478,131 @@ def test_dashboard_script_uses_authfetch_and_shared_session_module():
         "client_id",
     ):
         assert forbidden not in js
+
+
+# --------------------------------------------------------------------------------------
+# Products page (Phase 3 step 18)
+# --------------------------------------------------------------------------------------
+
+def test_products_page_renders_anonymously_with_shared_assets_and_states():
+    with TestClient(app) as c:
+        response = c.get("/dashboard/products")
+
+    html = response.text
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert response.text.count("<!doctype html>") == 1
+    assert 'lang="fa"' in html
+    assert 'dir="rtl"' in html
+    assert 'src="/static/js/session.js"' in html
+    assert 'src="/static/js/products.js"' in html
+    assert 'aria-label="ناوبری میزکار فروشنده"' in html
+    # Products is the current page in the shared nav — exactly one marker.
+    assert html.count('aria-current="page"') == 1
+    assert 'href="/dashboard/products" aria-current="page"' in html
+    # The three list states exist (loading, error, data/empty).
+    assert 'id="products-loading"' in html
+    assert 'id="products-error"' in html
+    assert 'id="products-data"' in html
+    assert 'role="alert"' in html
+    # Compact desktop table with the four §3.7.2 columns, built on the
+    # shared .table-wrap primitive and the stacked-mobile table class.
+    assert 'id="products-tbody"' in html
+    assert 'class="table-wrap"' in html
+    assert 'class="table-stack"' in html
+    for th in (
+        '<th scope="col">نام محصول</th>',
+        '<th scope="col" class="num">قیمت (تومان)</th>',
+        '<th scope="col">آخرین به‌روزرسانی</th>',
+        '<th scope="col">عملیات</th>',
+    ):
+        assert th in html
+    # Search, add/edit form, import, and pagination hooks all present.
+    assert 'id="product-search"' in html
+    assert 'id="product-form"' in html
+    assert 'id="product-form-title"' in html
+    assert 'id="import-file"' in html
+    assert 'accept=".xlsx"' in html
+    assert 'id="import-submit"' in html
+    assert 'id="products-pagination"' in html
+    assert 'aria-label="صفحه‌بندی محصولات"' in html
+    # The replace-all import warning is explicit and visible, not implied.
+    assert "همهٔ محصولات فعلی شما را حذف" in html
+    assert "جایگزین می‌کند" in html
+
+
+def test_products_page_exposes_no_auth_or_seller_secrets():
+    with TestClient(app) as c:
+        html = c.get("/dashboard/products").text.lower()
+
+    for forbidden in (
+        "client_id",
+        "seller_id",
+        "access_token",
+        "refresh_token",
+        "otp_hash",
+        "client_secret",
+        "jwt_secret",
+        "password",
+        "normalized_name",
+    ):
+        assert forbidden not in html
+
+
+def test_products_script_uses_authfetch_and_shared_session_module():
+    with TestClient(app) as c:
+        response = c.get("/static/js/products.js")
+
+    js = response.text
+    assert response.status_code == 200
+    assert "javascript" in response.headers["content-type"]
+    # All authenticated traffic goes through the shared session module only.
+    assert "window.DivarSession.authFetch" in js
+    assert "window.DivarSession.logout" in js
+    assert 'const LIST_URL = "/api/v1/seller/products"' in js
+    assert 'const IMPORT_URL = "/api/v1/seller/products/import"' in js
+    # No raw fetch, no duplicated refresh/retry/redirect logic.
+    assert "fetch(" not in js.replace("authFetch(", "")
+    assert "/auth/refresh" not in js
+    assert "/auth/logout" not in js
+    assert "window.location" not in js
+    # Destructive operations are confirmed before anything is sent; the
+    # import sends multipart form data built with browser-native APIs.
+    assert "confirm(" in js
+    assert "FormData" in js
+    assert "URLSearchParams" in js
+    # Duplicate-name (409) handling exists without echoing any product id.
+    assert "response.status === 409" in js
+    for forbidden in (
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "setItem",
+        "innerHTML",
+        "insertAdjacentHTML",
+        "console.",
+        "client_id",
+        "eval(",
+    ):
+        assert forbidden not in js
+
+
+def test_products_css_adds_toolbar_and_deliberate_stacked_mobile_table():
+    with TestClient(app) as c:
+        response = c.get("/static/css/main.css")
+
+    css = response.text
+    assert response.status_code == 200
+    # Search + actions row (the one genuine gap the products page adds).
+    assert ".toolbar" in css
+    assert ".toolbar-search" in css
+    # JS-driven pagination uses real buttons on the existing primitive.
+    assert ".pagination button" in css
+    # Deliberate mobile representation: stacked rows with inline labels,
+    # inside the existing mobile breakpoint (not a new breakpoint) — the
+    # desktop prefix keeps the compact rectangular table untouched.
+    assert ".table-stack thead" in css
+    assert ".table-stack td[data-label]::before" in css
+    assert "attr(data-label)" in css
+    assert ".table-stack td.cell-name" in css
+    assert ".table-stack" not in css.split("@media (max-width: 40rem)")[0]

@@ -501,6 +501,27 @@ td.num {
   }
 }
 
+/* --- Toolbar (search + actions row) ------------------------------------ */
+
+/* Shared row for a filter input and its related actions (products page §3.7.2).
+   No primitive covered this: page-header is title-level, .field stacks. */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block-end: var(--space-4);
+}
+
+.toolbar .toolbar-search {
+  flex: 1 1 14rem;
+  min-width: 12rem;
+}
+
+.toolbar .toolbar-search input {
+  width: 100%;
+}
+
 /* --- Pagination ------------------------------------------------------- */
 
 .pagination {
@@ -513,7 +534,8 @@ td.num {
 }
 
 .pagination a,
-.pagination span {
+.pagination span,
+.pagination button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -524,12 +546,27 @@ td.num {
   border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink-soft);
+  font: inherit;
   font-size: var(--text-sm);
   text-decoration: none;
 }
 
-.pagination a:hover {
+.pagination a:hover,
+.pagination button:not([disabled]):hover {
   background: var(--surface-sunken);
+}
+
+/* JS-driven paging uses real buttons (no page URLs to link to). */
+.pagination button {
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.pagination button[disabled] {
+  color: var(--ink-faint);
+  background: var(--surface-muted);
+  cursor: not-allowed;
 }
 
 .pagination [aria-current="page"] {
@@ -665,6 +702,63 @@ td.num {
 
   .dashboard-nav a {
     padding: var(--space-2) var(--space-3);
+  }
+
+  .toolbar .toolbar-search {
+    flex-basis: 100%;
+  }
+
+  /* Products table: deliberate stacked representation (§3.7.2) — each row
+     becomes a compact block with its column name as an inline label, instead
+     of a horizontally squeezed four-column table. Desktop is unchanged. */
+  .table-stack thead {
+    display: none;
+  }
+
+  .table-stack tr {
+    display: block;
+    padding-block: var(--space-3);
+    border-block-end: var(--border);
+  }
+
+  .table-stack tr:last-child {
+    border-block-end: 0;
+  }
+
+  .table-stack td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding-block: var(--space-1);
+    padding-inline: 0;
+    border-block-end: 0;
+    text-align: start;
+  }
+
+  .table-stack td+td {
+    margin-block-start: var(--space-1);
+  }
+
+  .table-stack td[data-label]::before {
+    content: attr(data-label);
+    color: var(--ink-soft);
+    font-weight: 600;
+  }
+
+  /* Undo the LTR column direction so labels sit on the same side as the
+     other stacked cells; the digits themselves still render in order. */
+  .table-stack td.num {
+    direction: rtl;
+  }
+
+  .table-stack td.cell-name {
+    font-weight: 700;
+  }
+
+  .table-stack td.cell-actions {
+    justify-content: flex-start;
+    margin-block-start: var(--space-2);
   }
 }
 
