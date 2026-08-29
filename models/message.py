@@ -32,7 +32,11 @@ class Message(Base):
         String(255), unique=True, nullable=True
     )
     sender_type: Mapped[SenderType] = mapped_column(
-        Enum(SenderType, name="sender_type_enum")
+        Enum(
+            SenderType,
+            name="sender_type_enum",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+        )
     )
     text_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
