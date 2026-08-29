@@ -44,7 +44,9 @@
 
 - [ ] **OAuth scope approval (Divar ticketing):** Submit ticket to approve for production:
       `USER_PHONE`, `USER_ID`, `offline_access`,
-      `CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND`, `CHAT_SUPPLIER_ALL_CONVERSATIONS_READ`.
+      `CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND`, `CHAT_SUPPLIER_ALL_CONVERSATIONS_READ`,
+      `USER_POSTS_GET` (added 2026-08-29 by step 20 — powers the listing sync;
+      narrower than the two chat scopes, it only reads the seller's own posts).
       Test apps get all scopes by default; production apps get none until individually
       approved. (Note: `docs/scopes/README.md` is a rate-limit/quota doc despite its name —
       the test-vs-production scope rule is in its final section. There is no complete scope

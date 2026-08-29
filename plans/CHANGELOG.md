@@ -4,6 +4,43 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-08-29 (step 20: Divar listing sync; POST /seller/posts retired)** —
+  Listings now come from Divar, not from manual token registration.
+
+  - **`POST /seller/posts` removed** (endpoint, `PostRegisterRequest`/
+    `PostRegisterResponse`, its two tests). From this step on, a seller's
+    `post_token` rows enter `posts` only via
+    `services/divar_listings.sync_listings`, and only after the seller has
+    completed "Sign in with Divar" (OAuth) at least once — OTP-only sellers
+    have no `oauth_tokens` row, so sync is a no-op for them. The
+    `ON CONFLICT (post_token) DO NOTHING` ownership pattern the endpoint used
+    moved into the sync service unchanged: a token already owned by another
+    client is never stolen.
+  - **`services/divar_listings.py` (new):** one GET to
+    `/v1/open-platform/finder/user-posts` per sync (no per-post enrichment
+    calls). Posts present in the response are inserted or metadata-refreshed
+    (`title`, `category`, `is_phone_hidden`, `chat_enabled` ←
+    `supplier_chat_assistant_enabled`, `last_synced_at`) with
+    `is_available = True`. Posts *owned by the syncing client* that the
+    response no longer returns get `is_available = False`; rows of other
+    clients are never touched (the update is scoped to `client_id`, and the
+    empty-response case marks only that seller's own posts). A failed
+    fetch/refresh aborts the sync before any write — a Divar error is never
+    mistaken for "the seller has no listings". Token refresh reuses
+    `oauth_refresh._refresh_supplier_token`. Maintainer decision: absent-from-
+    sync ⇒ unavailable, per the approvals of 2026-08-29.
+  - **OAuth scope:** `/oauth/start` now requests `USER_POSTS_GET` (sixth
+    scope) so the sync's access token can read the seller's posts. The
+    Pre-Production Checklist scope-approval ticket was updated to include it.
+  - **Plan-text deviation, maintainer-approved:** PHASE3_EXECUTION.md step 20
+    and PHASE3.md §3.8.2 say "never repurpose `posts`" / prefer a separate
+    `listings` table. Superseded by the same-day decision to fold the listing
+    columns into `posts` via the squashed baseline migration (see entry above)
+    — re-splitting would contradict the approved squash. `posts`' conversation-
+    resolution role is unchanged; the sync only adds nullable metadata.
+  - **Deferred to step 21:** any route/trigger invoking `sync_listings` (listing
+    read API, availability PATCH, UI). Step 20 ships the service + tests only.
+
 - **2026-08-29 (migration history squashed into a single baseline)** — Deleted the
   five Alembic migrations (`0001_initial_schema`, `0002_shrink_post_token`,
   `0003_make_conversation_state_required`,

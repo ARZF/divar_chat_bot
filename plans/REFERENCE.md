@@ -246,7 +246,7 @@ app/
 │   ├── oauth.py           # Phase 1 one-time tool kept; Phase 2 adds new per-client routes
 │   ├── auth.py            # Phase 2 (2.8) — OTP, refresh, logout, /auth/me
 │   ├── admin.py          # Phase 1, reworked in Phase 2
-│   ├── seller.py         # Phase 2 (2.7) — POST /seller/posts (post-token registration)
+│   ├── seller.py         # Phase 2 (2.7) + Phase 3 — seller APIs; POST /seller/posts retired in step 20
 │   └── web.py            # Phase 3 (3.5) — HTML/template router; currently only GET /web/probe
 ├── services/
 │   ├── divar.py          # Phase 1, reworked in Phase 2 (header split, get_user)
@@ -256,6 +256,7 @@ app/
 │   ├── chatbot_conversation.py # BOT-conversation (NEW_CHATBOT_MESSAGE) orchestration
 │   ├── post_conversation.py    # POST-conversation (NEW_MESSAGE) orchestration
 │   ├── oauth_refresh.py        # Seller OAuth token refresh
+│   ├── divar_listings.py # Phase 3 (step 20) — user-posts listing sync into posts
 │   ├── state_machine.py  # Phase 2 (2.6) — ConversationState, TRANSITIONS, INTENT_EVENTS
 │   └── ai.py             # Phase 4 only — do not create earlier
 ├── schemas/
