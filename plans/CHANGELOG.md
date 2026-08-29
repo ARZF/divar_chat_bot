@@ -4,6 +4,48 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-08-29 (migration history squashed into a single baseline)** — Deleted the
+  five Alembic migrations (`0001_initial_schema`, `0002_shrink_post_token`,
+  `0003_make_conversation_state_required`,
+  `0004_globally_unique_divar_conversation_id`,
+  `0005_add_post_conversation_memory`) and replaced them with ONE baseline
+  `0001_initial_schema` (`down_revision = None`) that creates the entire current
+  schema in a single `upgrade()`, including step 20's Divar-sourced listing
+  columns on `posts` (`title`, `category`, `chat_enabled`, `is_phone_hidden`,
+  `last_synced_at` — all nullable, written only by `services/divar_listings.py`).
+
+  **Why safe:** no migration in the old chain has ever run against a real
+  production database. The project is pre-production (the Pre-Production
+  Checklist is fully unchecked) and the database is wiped and recreated on every
+  redeploy, so no `alembic_version` row anywhere points at the deleted revision
+  IDs. Maintainer confirmed this directly on 2026-08-29; the repo corroborates
+  (no Railway/CI deploy configs checked in; deployments run
+  `alembic upgrade head` on Railway against a database that is recreated, not
+  migrated forward from an old chain).
+
+  **⚠️ Do not repeat this** once a real production deployment exists: squashing
+  then would strand every deployed `alembic_version` row and require manual
+  stamping on each environment. From that point on, only additive migrations on
+  top of the baseline.
+
+  **Verification:** structural, not live-Postgres. (1) An
+  `alembic upgrade head` → `alembic downgrade base` round-trip against a
+  throwaway SQLite database (the JSONB columns compile there via a
+  `.with_variant(sa.JSON(), "sqlite")` that renders plain JSONB on Postgres);
+  all ten tables, both `conversations` UNIQUE constraints (the composite
+  ON CONFLICT target AND the global one from old 0004), all indexes and
+  server_defaults verified present, downgrade drops everything. (2) A manual
+  column/constraint/index/enum diff of the new file against the five deleted
+  migrations' cumulative state and the model files. It was **not** verified
+  against a live Postgres instance — the first `alembic upgrade head` run on
+  Railway's Postgres after this change ships is the real verification moment.
+
+  Note for readers of earlier entries: references below to migrations `0003`
+  and `0004` (2026-08-09, 2026-08-13) describe the now-deleted pre-squash
+  files; their schema effects live on in the squashed baseline. Live-code
+  comments that cited "migration 0004" by number were reworded to cite the
+  constraint name (`uq_conversations_divar_conversation_id`) instead.
+
 - **2026-08-20 (advisor-plans archived and removed)** — Deleted the `advisor-plans/`
   directory (7 plans + its `README.md`). These were **advisor-authored improvement
   plans**, deliberately kept separate from this project's own phased plan in `plans/`;

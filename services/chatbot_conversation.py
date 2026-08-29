@@ -72,9 +72,10 @@ async def _lookup_conversation(
 ) -> Optional[Conversation]:
     """Look up an existing resolved conversation by its Divar-assigned ID."""
     # No client_id filter is possible here — it is exactly what this lookup
-    # resolves. scalar_one_or_none() is safe because migration 0004 makes
-    # divar_conversation_id globally UNIQUE at the DB level; do not add a
-    # defensive .first()/limit(1) fallback, it would only mask a broken schema.
+    # resolves. scalar_one_or_none() is safe because
+    # uq_conversations_divar_conversation_id makes divar_conversation_id
+    # globally UNIQUE at the DB level; do not add a defensive
+    # .first()/limit(1) fallback, it would only mask a broken schema.
     stmt = select(Conversation).where(
         Conversation.divar_conversation_id == divar_conversation_id
     )
@@ -124,8 +125,9 @@ async def _resolve_new_conversation(
     # Atomic upsert: INSERT ... ON CONFLICT DO NOTHING.
     # The named composite constraint covers legitimate redelivery only — same
     # client, same conversation. A *different* client claiming this
-    # divar_conversation_id conflicts against 0004's global UNIQUE instead,
-    # which DO NOTHING does not swallow: it raises IntegrityError below.
+    # divar_conversation_id conflicts against the global UNIQUE
+    # uq_conversations_divar_conversation_id instead, which DO NOTHING
+    # does not swallow: it raises IntegrityError below.
     insert_stmt = (
         pg_insert(Conversation)
         .values(

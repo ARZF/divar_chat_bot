@@ -1119,7 +1119,8 @@ async def test_cross_client_conversation_id_collision_fails_safe(
     """A second client claiming a live divar_conversation_id must not 500.
 
     The composite ON CONFLICT target does not cover this — it is a different
-    client_id — so migration 0004's global UNIQUE raises IntegrityError. That
+    client_id — so the global UNIQUE (uq_conversations_divar_conversation_id)
+    raises IntegrityError. That
     must be caught and routed to UNRESOLVED_CLIENT_MESSAGE, the same fail-safe
     path as an unknown post token, leaving the real owner's row untouched.
     """
