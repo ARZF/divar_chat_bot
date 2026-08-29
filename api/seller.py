@@ -22,7 +22,6 @@ from fastapi import (
     status,
 )
 from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,8 +34,6 @@ from models.post_conversation import PostConversation
 from models.product import Product
 from schemas.seller import (
     DashboardSummaryResponse,
-    PostRegisterRequest,
-    PostRegisterResponse,
     ProductCreateRequest,
     ProductDetailResponse,
     ProductImportResponse,
@@ -55,42 +52,6 @@ logger = logging.getLogger("seller")
 IMPORT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 
 
-@router.post("/seller/posts", response_model=PostRegisterResponse)
-async def register_posts(
-    body: PostRegisterRequest,
-    client_id: int = Depends(get_current_client_id),
-    db: AsyncSession = Depends(get_db),
-) -> PostRegisterResponse:
-    """Register the authenticated seller's post tokens.
-
-    Each token is inserted as a `posts` row tagged with the seller's
-    `client_id`. Tokens already present (for any client) are left untouched via
-    `ON CONFLICT DO NOTHING`. Returns how many were newly registered vs. already
-    existed. Tokens repeated within the request body are counted once.
-    """
-    # De-duplicate within the request body, preserving order. Tokens are already
-    # stripped/validated by the schema.
-    distinct_tokens = list(dict.fromkeys(body.post_tokens))
-
-    stmt = (
-        pg_insert(Post)
-        .values([{"post_token": token, "client_id": client_id} for token in distinct_tokens])
-        .on_conflict_do_nothing(index_elements=["post_token"])
-        .returning(Post.post_token)
-    )
-    result = await db.execute(stmt)
-    inserted = result.scalars().all()
-    await db.commit()
-
-    registered = len(inserted)
-    already_existed = len(distinct_tokens) - registered
-
-    return PostRegisterResponse(
-        registered=registered,
-        already_existed=already_existed,
-    )
-
-
 @router.get(
     "/api/v1/seller/dashboard/summary",
     response_model=DashboardSummaryResponse,
@@ -101,11 +62,10 @@ async def dashboard_summary(
 ) -> DashboardSummaryResponse:
     """Lightweight overview counts for the dashboard shell (§3.6, §3.23).
 
-    §3.13 gives NEW seller APIs the `/api/v1/seller/...` prefix; the existing
-    `/seller/posts` keeps its established Phase 2 contract. Identity follows
-    `/auth/me` semantics (401 when the JWT's client no longer exists). Every
-    count filters on the JWT-derived `client_id` — COUNT() only, no rows are
-    loaded, and no `client_id` is ever accepted from the browser.
+    Identity follows `/auth/me` semantics (401 when the JWT's client no
+    longer exists). Every count filters on the JWT-derived `client_id` —
+    COUNT() only, no rows are loaded, and no `client_id` is ever accepted
+    from the browser.
     """
     result = await db.execute(select(Client).where(Client.id == client_id))
     client = result.scalar_one_or_none()

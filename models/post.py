@@ -2,9 +2,11 @@
 plus Divar-sourced listing metadata (title/category/chat flags/last_synced_at)
 fetched by services/divar_listings.py (step 20).
 
-The Divar-sourced columns are written ONLY by that sync service; is_available
-remains the project's own chatbot-availability flag (§3.8.4) and is never
-sourced from Divar.
+All Divar-sourced columns are written ONLY by that sync service, which also
+maintains `is_available` as the presence flag: True for posts present in the
+latest user-posts sync, False for this seller's posts the sync no longer
+returns. It remains the flag the chatbot/availability API treats as the
+source of truth (§3.8.4).
 """
 from __future__ import annotations
 
@@ -32,10 +34,10 @@ class Post(Base):
         Boolean, default=True, server_default="true", nullable=False
     )
 
-    # Divar-sourced listing metadata (step 20); all nullable because a post
-    # can be registered before its first listing sync. Sources:
-    # user-posts (title, category, is_phone_hidden) and finder/post
-    # (chat_enabled) per docs/post/get_user_posts.md and docs/post/get_post.md.
+    # Divar-sourced listing metadata (step 20); all nullable because rows are
+    # only written by services/divar_listings.py, and the source (user-posts)
+    # may omit any field. Per docs/post/get_user_posts.md: title, category,
+    # is_phone_hidden, and supplier_chat_assistant_enabled → chat_enabled.
     title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     category: Mapped[str | None] = mapped_column(String(100), nullable=True)
     chat_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

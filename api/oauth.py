@@ -62,7 +62,7 @@ async def oauth_start() -> RedirectResponse:
         "scope": (
             "USER_PHONE USER_ID offline_access "
             "CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND "
-            "CHAT_SUPPLIER_ALL_CONVERSATIONS_READ"
+            "CHAT_SUPPLIER_ALL_CONVERSATIONS_READ USER_POSTS_GET"
         ),
         "state": state,
     }
