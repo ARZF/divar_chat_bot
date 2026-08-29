@@ -410,14 +410,6 @@ def test_admin_upload_prices_rejects_missing_authorization(client):
     assert resp.status_code == 401
 
 
-def test_seller_posts_rejects_missing_authorization(client):
-    resp = client.post(
-        "/seller/posts",
-        json={"post_tokens": ["post-token"]},
-    )
-    assert resp.status_code == 401
-
-
 # --------------------------------------------------------------------------------------
 # find_or_create_client merge logic
 # --------------------------------------------------------------------------------------

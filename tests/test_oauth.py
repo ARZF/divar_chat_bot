@@ -58,7 +58,7 @@ async def test_oauth_start_redirects_and_stores_state_for_ten_minutes(mocker):
         "scope": [
             "USER_PHONE USER_ID offline_access "
             "CHAT_SUPPLIER_ALL_CONVERSATIONS_MESSAGE_SEND "
-            "CHAT_SUPPLIER_ALL_CONVERSATIONS_READ"
+            "CHAT_SUPPLIER_ALL_CONVERSATIONS_READ USER_POSTS_GET"
         ],
         "state": ["state-1"],
     }

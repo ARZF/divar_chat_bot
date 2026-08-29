@@ -368,10 +368,12 @@ def test_existing_api_routes_still_registered():
         "/api/v1/webhook",
         "/auth/otp/request",
         "/admin/upload-prices",
-        "/seller/posts",
         "/oauth/callback",
         "/api/v1/seller/dashboard/summary",
     } <= paths
+    # POST /seller/posts was retired in step 20 — listings now enter `posts`
+    # only via services/divar_listings.py's sync after Divar OAuth.
+    assert "/seller/posts" not in paths
 
 
 # --------------------------------------------------------------------------------------
