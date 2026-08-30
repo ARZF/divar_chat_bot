@@ -4,6 +4,57 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-08-30 (step 21: listing read/sync/availability APIs; presence split
+  from availability)** — The three seller listing endpoints land, and the
+  `is_available` conflation is resolved.
+
+  - **Schema: new `posts.present_on_divar` column** (baseline `0001` only — no
+    `0002`; the DB is recreated from the baseline, so changes fold in).
+    Maintainer directive: three concepts were conflated under one boolean —
+    (1) listing existence on Divar, (2) product sold/unsold, (3) chatbot
+    enabled/disabled. Resolution:
+    - `present_on_divar` — listing existence on Divar. **Written only by
+      `services/divar_listings.py`** (sync): present in the user-posts
+      response → True; absent from a sync → False (scoped to the syncing
+      client only).
+    - `is_available` — the seller's own chatbot on/off toggle (§3.8.4).
+      **Written only by the PATCH endpoint.** Sync never touches it, so a
+      manual toggle survives every sync.
+    - "Sold" deliberately has **no posts field** — chatbot answers about
+      products derive from the seller's products catalog (maintainer:
+      "catalog is enough").
+  - **Conversation resolution now requires BOTH flags.**
+    `chatbot_conversation._resolve_new_conversation` (start touchpoint) and
+    `post_conversation.handle_post_bot_reply` (NEW_MESSAGE webhook) resolve a
+    post_token only when `present_on_divar AND is_available`; otherwise the
+    token is treated exactly like an unregistered one (silent skip — no
+    leak, no error). Before this step `is_available` had zero readers (both
+    resolution sites selected only `client_id`), so redefining it changed no
+    runtime behavior.
+  - **`GET /api/v1/seller/listings`** — paginated (page/page_size 1..100,
+    mirrors the products list), tenant-scoped via JWT, ordered
+    `created_at DESC, post_token ASC`. Returns post_token, title, category,
+    chat_enabled, is_phone_hidden, is_available, present_on_divar,
+    last_synced_at — never `client_id`, never price/status/url (unsupported
+    per the step 19 matrix). **Never calls Divar**: rate limits are per-app
+    (docs/scopes/README.md), so sync-on-read would let one seller's dashboard
+    polling burn the quota all sellers share. OTP-only sellers get an honest
+    empty list, not an error.
+  - **`POST /api/v1/seller/listings/sync`** — the explicit refresh trigger
+    (the counterpart to the read endpoint's read-only design; the seller
+    decides when to spend the one user-posts GET). `skipped` (OTP-only or
+    refresh failure) writes nothing; a Divar outage maps to 502 with no
+    writes.
+  - **`PATCH /api/v1/seller/listings/{post_token}/availability`** — §3.8.4.
+    Body `{"is_available": bool}`; lookup is always
+    `post_token AND client_id`, so missing and cross-tenant return the same
+    non-leaking 404 (§3.14). Sets only `is_available`; never calls Divar.
+  - **Test note:** Pydantic v2 lax mode coerces `1`/`"yes"` to `True` for a
+    `bool` field, so those are valid PATCH bodies, not 422s — the validation
+    test uses payloads that genuinely fail (`{}`, `"maybe"`, `[True]`).
+  - **Deferred, not forgotten:** image upload (§3.8.5) is out of scope for
+    step 21, as the step text itself specifies.
+
 - **2026-08-29 (step 20: Divar listing sync; POST /seller/posts retired)** —
   Listings now come from Divar, not from manual token registration.
 
