@@ -234,6 +234,62 @@ async def test_unresolved_start_does_not_persist_conversation(db, seeded_post):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("flag_off", ["is_available", "present_on_divar"])
+async def test_disabled_or_removed_post_does_not_resolve(
+    db, seeded_post, sqlite_upsert, flag_off
+):
+    """The chatbot handles a listing only while it still exists on Divar
+    (present_on_divar) AND its seller has not disabled it (is_available).
+    Either flag off → resolution fails exactly like an unregistered token:
+    no conversation persisted, no attribution."""
+    client, post = seeded_post
+    setattr(post, flag_off, False)
+    await db.commit()
+
+    resolved = await chatbot._resolve_new_conversation(
+        db,
+        "conversation-gated",
+        f"/start MY_POST {post.post_token}",
+    )
+
+    assert resolved is None
+    conversation = (
+        await db.execute(
+            select(Conversation).where(
+                Conversation.divar_conversation_id == "conversation-gated"
+            )
+        )
+    ).scalar_one_or_none()
+    assert conversation is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag_off", ["is_available", "present_on_divar"])
+async def test_handle_post_bot_reply_gated_post_does_not_send(
+    monkeypatch, session_factory, seeded_post, sqlite_upsert, flag_off
+):
+    """Same gate on the NEW_MESSAGE path: no reply is sent for a listing
+    that is gone from Divar or chatbot-disabled by its seller."""
+    client, post = seeded_post
+    async with session_factory() as db:
+        gated = (
+            await db.execute(select(Post).where(Post.post_token == post.post_token))
+        ).scalar_one()
+        setattr(gated, flag_off, False)
+        await db.commit()
+
+    _patch_session_local(monkeypatch, lambda: session_factory())
+    send = AsyncMock()
+    monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", send)
+    await chatbot.handle_post_bot_reply(
+        "conversation-gated", post.post_token, "hello", "m1"
+    )
+    send.assert_not_awaited()
+    async with session_factory() as db:
+        assert not (await db.execute(select(PostMessage))).scalars().all()
+
+
+@pytest.mark.asyncio
 async def test_bare_touchpoint_does_not_persist_conversation(db, seeded_post):
     resolved_client_id = await chatbot._resolve_new_conversation(
         db,
@@ -704,7 +760,7 @@ async def test_handle_post_bot_reply_unknown_post_does_not_send(
     with caplog.at_level(logging.WARNING, logger="chatbot"):
         await chatbot.handle_post_bot_reply("unknown-conversation", "unknown-post", "hello", "m1")
     send.assert_not_awaited()
-    assert any(record.message == "NEW_MESSAGE post_token did not resolve to a client" for record in caplog.records)
+    assert any(record.message == "NEW_MESSAGE post_token did not resolve to an active listing" for record in caplog.records)
 
 
 @pytest.mark.asyncio

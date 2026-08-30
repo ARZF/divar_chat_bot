@@ -1,9 +1,12 @@
-"""Tests for services/divar_listings.py (Phase 3 step 20).
+"""Tests for services/divar_listings.py (Phase 3 steps 20-21).
 
-Core rule under test: a seller's post tokens enter `posts` only after that
-seller completed Divar OAuth — OTP-only sellers (no oauth_tokens row) never
-get listings inserted. Plus the availability semantics: present in the sync
-→ is_available True; absent → False, scoped strictly to the syncing client.
+Core rules under test:
+* a seller's post tokens enter `posts` only after that seller completed
+  Divar OAuth — OTP-only sellers (no oauth_tokens row) never get listings;
+* presence semantics: present in the sync → present_on_divar True; absent →
+  False, scoped strictly to the syncing client;
+* `is_available` is the seller's own chatbot toggle (§3.8.4) — sync NEVER
+  writes it, so a manual toggle survives every sync.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -127,7 +130,7 @@ async def test_sync_inserts_new_posts_with_metadata_in_one_request(db, mocker):
 
     result = await divar_listings.sync_listings(db, client.id)
 
-    assert result == {"registered": 2, "updated": 0, "marked_unavailable": 0}
+    assert result == {"registered": 2, "updated": 0, "marked_absent": 0}
     # One API request per sync — no per-post enrichment calls.
     assert http.get.await_count == 1
     call = http.get.await_args
@@ -140,26 +143,28 @@ async def test_sync_inserts_new_posts_with_metadata_in_one_request(db, mocker):
     assert post.category == "apartment-rent"
     assert post.is_phone_hidden is True
     assert post.chat_enabled is True
-    assert post.is_available is True
+    assert post.present_on_divar is True
+    assert post.is_available is True  # default — the seller's toggle, untouched
     assert post.last_synced_at is not None
 
     post2 = await _get_post(db, "GZb9NfaX")
     assert post2.chat_enabled is False
-    assert post2.is_available is True
+    assert post2.present_on_divar is True
 
 
 @pytest.mark.asyncio
-async def test_sync_updates_own_post_and_marks_missing_one_unavailable(db, mocker):
+async def test_sync_updates_own_post_and_marks_missing_one_absent(db, mocker):
     client = await _add_client(db)
     db.add(
         Post(
             post_token="QVZ8LgaW",
             client_id=client.id,
             title="old title",
-            is_available=False,  # previously unavailable — sync must flip it back
+            present_on_divar=True,
+            is_available=False,  # seller disabled the chatbot — sync must NOT flip it
         )
     )
-    db.add(Post(post_token="GONE01", client_id=client.id, is_available=True))
+    db.add(Post(post_token="GONE01", client_id=client.id, present_on_divar=True))
     await db.commit()
     mocker.patch.object(
         divar_service, "client", new=_user_posts_client([POSTS_PAYLOAD[0]])
@@ -167,14 +172,17 @@ async def test_sync_updates_own_post_and_marks_missing_one_unavailable(db, mocke
 
     result = await divar_listings.sync_listings(db, client.id)
 
-    assert result == {"registered": 0, "updated": 1, "marked_unavailable": 1}
+    assert result == {"registered": 0, "updated": 1, "marked_absent": 1}
 
     present = await _get_post(db, "QVZ8LgaW")
     assert present.title == "اجاره آپارتمان ۱۰۰ متری"
-    assert present.is_available is True
+    assert present.present_on_divar is True
+    # The manual chatbot-off toggle survived the sync.
+    assert present.is_available is False
 
     gone = await _get_post(db, "GONE01")
-    assert gone.is_available is False
+    assert gone.present_on_divar is False
+    assert gone.is_available is True  # seller's toggle untouched by absence
 
 
 @pytest.mark.asyncio
@@ -187,12 +195,13 @@ async def test_sync_never_touches_another_clients_posts(db, mocker):
     await db.flush()
     # other's post: absent from this sync AND present under another client's
     # ownership — both protections tested at once is ambiguous, so split:
-    db.add(Post(post_token="OTHER_GONE", client_id=other.id, is_available=True))
+    db.add(Post(post_token="OTHER_GONE", client_id=other.id, present_on_divar=True))
     db.add(
         Post(
             post_token="QVZ8LgaW",
             client_id=other.id,
             title="other's title",
+            present_on_divar=False,
             is_available=False,
         )
     )
@@ -209,35 +218,36 @@ async def test_sync_never_touches_another_clients_posts(db, mocker):
     stolen = await _get_post(db, "QVZ8LgaW")
     assert stolen.client_id == other.id
     assert stolen.title == "other's title"
-    assert stolen.is_available is False  # untouched, not re-activated
+    assert stolen.present_on_divar is False  # untouched, not re-activated
+    assert stolen.is_available is False  # untouched — and never sync's to write
     assert stolen.last_synced_at is None
 
     # OTHER_GONE is absent from the sync but belongs to `other` — untouched.
     untouched = await _get_post(db, "OTHER_GONE")
     assert untouched.client_id == other.id
-    assert untouched.is_available is True
+    assert untouched.present_on_divar is True
 
 
 @pytest.mark.asyncio
-async def test_sync_empty_response_marks_all_own_posts_unavailable(db, mocker):
+async def test_sync_empty_response_marks_all_own_posts_absent(db, mocker):
     """The seller genuinely has no listings on Divar → all their own posts
-    become unavailable; another client's posts are untouched."""
+    are marked absent; another client's posts are untouched."""
     client = await _add_client(db)
     other = Client(phone_number="09120000002")
     db.add(other)
     await db.flush()
-    db.add(Post(post_token="P1", client_id=client.id, is_available=True))
-    db.add(Post(post_token="P2", client_id=client.id, is_available=True))
-    db.add(Post(post_token="OTHER1", client_id=other.id, is_available=True))
+    db.add(Post(post_token="P1", client_id=client.id, present_on_divar=True))
+    db.add(Post(post_token="P2", client_id=client.id, present_on_divar=True))
+    db.add(Post(post_token="OTHER1", client_id=other.id, present_on_divar=True))
     await db.commit()
     mocker.patch.object(divar_service, "client", new=_user_posts_client([]))
 
     result = await divar_listings.sync_listings(db, client.id)
 
-    assert result["marked_unavailable"] == 2
-    assert (await _get_post(db, "P1")).is_available is False
-    assert (await _get_post(db, "P2")).is_available is False
-    assert (await _get_post(db, "OTHER1")).is_available is True
+    assert result == {"registered": 0, "updated": 0, "marked_absent": 2}
+    assert (await _get_post(db, "P1")).present_on_divar is False
+    assert (await _get_post(db, "P2")).present_on_divar is False
+    assert (await _get_post(db, "OTHER1")).present_on_divar is True
 
 
 @pytest.mark.asyncio
@@ -303,6 +313,8 @@ async def test_sync_aborts_without_writes_when_divar_fails(db, mocker):
     with pytest.raises(httpx.HTTPStatusError):
         await divar_listings.sync_listings(db, client.id)
 
+    # Nothing was written: the post is still present and untouched.
+    assert (await _get_post(db, "P1")).present_on_divar is True
     assert (await _get_post(db, "P1")).is_available is True
 
 
