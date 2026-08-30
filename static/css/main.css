@@ -584,6 +584,35 @@ td.num {
   color: var(--ink-faint);
 }
 
+/* --- Listings (step 22) -------------------------------------------------- */
+
+/* A listing the latest sync no longer sees on Divar stays visible (its toggle
+   and history remain, per step 21's soft-sync design) but reads as
+   informational: muted ink on the sunken surface — no danger red. */
+.row-absent td {
+  color: var(--ink-soft);
+  background: var(--surface-muted);
+}
+
+/* Secondary line inside the listing cell (Divar's raw category slug). */
+.cell-sub {
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+}
+
+/* Per-toggle failure text: small, danger-colored, beside its own control.
+   The [hidden] guard is required because a display rule on the class would
+   otherwise override the browser's hidden handling. */
+.toggle-error {
+  display: block;
+  color: var(--danger);
+  font-size: var(--text-xs);
+}
+
+.toggle-error[hidden] {
+  display: none;
+}
+
 /* --- Dashboard shell --------------------------------------------------- */
 
 /* Two-column workspace: fixed sidebar nav + main column. Not a card grid —

@@ -608,3 +608,153 @@ def test_products_css_adds_toolbar_and_deliberate_stacked_mobile_table():
     assert "attr(data-label)" in css
     assert ".table-stack td.cell-name" in css
     assert ".table-stack" not in css.split("@media (max-width: 40rem)")[0]
+
+
+# --------------------------------------------------------------------------------------
+# Listings page (Phase 3 step 22)
+# --------------------------------------------------------------------------------------
+
+def test_listings_page_renders_anonymously_with_shared_assets_and_states():
+    with TestClient(app) as c:
+        response = c.get("/dashboard/listings")
+
+    html = response.text
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert response.text.count("<!doctype html>") == 1
+    assert 'lang="fa"' in html
+    assert 'dir="rtl"' in html
+    assert 'src="/static/js/session.js"' in html
+    assert 'src="/static/js/listings.js"' in html
+    assert 'aria-label="ناوبری میزکار فروشنده"' in html
+    # Listings is the current page in the shared nav — exactly one marker.
+    assert html.count('aria-current="page"') == 1
+    assert 'href="/dashboard/listings" aria-current="page"' in html
+    # The three list states exist (loading, error, data/empty).
+    assert 'id="listings-loading"' in html
+    assert 'id="listings-error"' in html
+    assert 'id="listings-data"' in html
+    assert 'role="alert"' in html
+    # Sync trigger, its failure/success slots, and the OTP-only guidance
+    # (skipped sync) with a direct "Sign in with Divar" path.
+    assert 'id="listings-sync-button"' in html
+    assert 'id="listings-sync-error"' in html
+    assert 'id="listings-sync-feedback"' in html
+    assert 'id="listings-sync-skipped"' in html
+    assert 'href="/oauth/start"' in html
+    # Honest generic empty state (the API cannot distinguish never-synced
+    # from synced-but-zero, so no fabricated distinction is rendered).
+    assert "دکمهٔ «همگام‌سازی با دیوار» را بزنید" in html
+    # Compact desktop table on the shared primitives with ONLY the §3.8.3
+    # columns the step 19/21 APIs support.
+    assert 'id="listings-tbody"' in html
+    assert 'class="table-wrap"' in html
+    assert 'class="table-stack"' in html
+    for th in (
+        '<th scope="col">آگهی</th>',
+        '<th scope="col">وضعیت در دیوار</th>',
+        '<th scope="col">دستیار چت دیوار</th>',
+        '<th scope="col">شمارهٔ تماس</th>',
+        '<th scope="col" class="num">آخرین همگام‌سازی</th>',
+        '<th scope="col">پاسخ‌گوی خودکار</th>',
+        '<th scope="col">لینک</th>',
+    ):
+        assert th in html
+    # Unsupported capabilities are absent, not implied: no price column, no
+    # lifecycle status, no edit/delete controls (§3.8.3).
+    for unsupported in ("قیمت", "ویرایش", "حذف"):
+        assert unsupported not in html
+    # The chat_enabled/is_available distinction is explicit visible copy.
+    assert "تغییری در خود آگهی دیوار ایجاد نمی‌کند" in html
+    assert "تنظیم خود دیوار است" in html
+    assert 'aria-label="صفحه‌بندی آگهی‌ها"' in html
+
+
+def test_listings_page_exposes_no_auth_or_seller_secrets():
+    with TestClient(app) as c:
+        html = c.get("/dashboard/listings").text.lower()
+
+    for forbidden in (
+        "client_id",
+        "seller_id",
+        "access_token",
+        "refresh_token",
+        "otp_hash",
+        "client_secret",
+        "jwt_secret",
+        "password",
+    ):
+        assert forbidden not in html
+
+
+def test_listings_script_uses_authfetch_and_renders_only_supported_fields():
+    with TestClient(app) as c:
+        response = c.get("/static/js/listings.js")
+
+    js = response.text
+    assert response.status_code == 200
+    assert "javascript" in response.headers["content-type"]
+    # All authenticated traffic goes through the shared session module only.
+    assert "window.DivarSession.authFetch" in js
+    assert "window.DivarSession.logout" in js
+    assert 'const LIST_URL = "/api/v1/seller/listings"' in js
+    assert 'const SYNC_URL = "/api/v1/seller/listings/sync"' in js
+    # No raw fetch, no duplicated refresh/retry/redirect logic.
+    assert "fetch(" not in js.replace("authFetch(", "")
+    assert "/auth/refresh" not in js
+    assert "/auth/logout" not in js
+    assert "window.location" not in js
+    # Exactly the two supported mutations: explicit sync (POST) and the
+    # reversible availability toggle (PATCH, JSON body). The toggle is
+    # reversible, so unlike products' delete there is no confirmation dialog.
+    assert 'method: "POST"' in js
+    assert 'method: "PATCH"' in js
+    assert "confirm(" not in js
+    assert "DELETE" not in js
+    # Exactly the step 21 field contract is rendered — nothing fabricated.
+    for field in (
+        "post_token",
+        "title",
+        "category",
+        "chat_enabled",
+        "is_phone_hidden",
+        "present_on_divar",
+        "last_synced_at",
+        "is_available",
+    ):
+        assert field in js
+    # Token-only Divar link — no fabricated seo-slug (step 19 finding).
+    assert '"https://divar.ir/v/"' in js
+    # present_on_divar=false is visually marked (never hidden) and the
+    # OTP-only "skipped" sync is handled as guidance, not an error.
+    assert "row-absent" in js
+    assert 'data.status === "skipped"' in js
+    for forbidden in (
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "setItem",
+        "innerHTML",
+        "insertAdjacentHTML",
+        "console.",
+        "client_id",
+        "eval(",
+        "price",
+        "divar_post_id",
+    ):
+        assert forbidden not in js
+
+
+def test_listings_css_marks_absent_rows_informationally():
+    with TestClient(app) as c:
+        response = c.get("/static/css/main.css")
+
+    css = response.text
+    assert response.status_code == 200
+    # Absent-from-Divar rows: muted and informational — never danger-colored,
+    # and never hidden (the soft-sync design keeps them and their toggle).
+    assert ".row-absent td" in css
+    # Per-toggle failure text and the secondary category line.
+    assert ".toggle-error" in css
+    assert ".toggle-error[hidden]" in css
+    assert ".cell-sub" in css

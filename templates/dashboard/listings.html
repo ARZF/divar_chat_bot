@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}آگهی‌های من | دستیار فروش دیوار{% endblock %}
+
+{% block content %}
+<div class="container dashboard-layout">
+  {% include "partials/dashboard_nav.html" %}
+
+  <div class="dashboard-main">
+    <header class="page-header" aria-labelledby="listings-title">
+      <div>
+        <h1 id="listings-title">آگهی‌های من</h1>
+        <p class="page-title-note">آگهی‌های شما از دیوار خوانده می‌شود؛ داده‌ها پس از ورود بارگذاری می‌شود.</p>
+      </div>
+      <button type="button" class="btn" data-listings-logout>خروج از حساب</button>
+    </header>
+
+    <div id="listings-loading" class="state state-loading">در حال بارگذاری آگهی‌ها…</div>
+
+    <div id="listings-error" class="alert alert-error" role="alert" hidden>
+      <div>
+        <p id="listings-error-text">بارگذاری آگهی‌ها انجام نشد.</p>
+        <p><a href="/login">بازگشت به صفحهٔ ورود</a></p>
+      </div>
+    </div>
+
+    <div id="listings-data" hidden>
+      <div class="toolbar">
+        <button type="button" class="btn" id="listings-sync-button">همگام‌سازی با دیوار</button>
+      </div>
+
+      <div id="listings-sync-error" class="alert alert-error" role="alert" hidden>
+        <p></p>
+      </div>
+
+      <div id="listings-sync-skipped" class="alert alert-warning" role="status" hidden>
+        <div>
+          <p>برای دیدن آگهی‌های دیوار خود، ابتدا باید یک‌بار با حساب دیوار خود وارد شوید. آگهی‌ها پس از ورود با دیوار و همگام‌سازی نمایش داده می‌شوند.</p>
+          <p><a href="/oauth/start">ورود با دیوار</a></p>
+        </div>
+      </div>
+
+      <div id="listings-sync-feedback" class="alert alert-success" role="status" hidden>
+        <p></p>
+      </div>
+
+      <p>
+        «پاسخ‌گوی خودکار» فقط رفتار چت‌بات این سامانه را در گفتگوی همان آگهی روشن و
+        خاموش می‌کند و تغییری در خود آگهی دیوار ایجاد نمی‌کند. «دستیار چت دیوار»
+        تنظیم خود دیوار است و فقط نمایش داده می‌شود.
+      </p>
+
+      <div class="table-wrap" id="listings-table-wrap">
+        <table id="listings-table" class="table-stack">
+          <thead>
+            <tr>
+              <th scope="col">آگهی</th>
+              <th scope="col">وضعیت در دیوار</th>
+              <th scope="col">دستیار چت دیوار</th>
+              <th scope="col">شمارهٔ تماس</th>
+              <th scope="col" class="num">آخرین همگام‌سازی</th>
+              <th scope="col">پاسخ‌گوی خودکار</th>
+              <th scope="col">لینک</th>
+            </tr>
+          </thead>
+          <tbody id="listings-tbody"></tbody>
+        </table>
+      </div>
+
+      <div id="listings-empty" class="state" hidden>
+        <p id="listings-empty-text">هنوز آگهی‌ای نمایش داده نمی‌شود. اگر در دیوار آگهی دارید، دکمهٔ «همگام‌سازی با دیوار» را بزنید.</p>
+      </div>
+
+      <nav id="listings-pagination" class="pagination" aria-label="صفحه‌بندی آگهی‌ها" hidden></nav>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/listings.js"></script>
+{% endblock %}

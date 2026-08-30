@@ -90,3 +90,21 @@ async def dashboard_products(request: Request) -> HTMLResponse:
         "dashboard/products.html",
         {"dashboard_nav_active": "products"},
     )
+
+
+@router.get("/dashboard/listings", response_class=HTMLResponse)
+async def dashboard_listings(request: Request) -> HTMLResponse:
+    """Render the listing management page (§3.8.3).
+
+    Same step 12 convention: the shell renders anonymously — no listing data,
+    no auth, no server-side Divar calls — and static/js/listings.js loads
+    everything client-side through the step 21 tenant-scoped listing APIs
+    (list, explicit sync, availability toggle). Only Divar-supported fields
+    are shown; unsupported actions (price, lifecycle status, edit, delete)
+    are not rendered at all.
+    """
+    return templates.TemplateResponse(
+        request,
+        "dashboard/listings.html",
+        {"dashboard_nav_active": "listings"},
+    )
