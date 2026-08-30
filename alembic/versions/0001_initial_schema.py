@@ -13,9 +13,11 @@ This single baseline REPLACES the former five-migration chain:
   0004_globally_unique_divar_conversation_id
   0005_add_post_conversation_memory     (post_conversations / post_messages
                                          and their enums)
-It also folds in step 20's Divar-sourced listing columns on posts
-(title, category, chat_enabled, is_phone_hidden, last_synced_at — all
-nullable, written only by services/divar_listings.py).
+It also folds in the listing columns on posts from steps 20-21:
+the Divar-sourced metadata (title, category, chat_enabled, is_phone_hidden,
+last_synced_at — all nullable, written only by services/divar_listings.py),
+`present_on_divar` (sync-owned listing existence on Divar), and
+`is_available` (seller-owned chatbot toggle, §3.8.4 — never written by sync).
 
 The history was collapsed because NO migration in the old chain has ever run
 against a real production database: the project is pre-production and the
@@ -170,15 +172,22 @@ def upgrade() -> None:
         op.f("ix_refresh_tokens_client_id"), "refresh_tokens", ["client_id"]
     )
 
-    # --- posts (0001 + 0002's shrink/is_available + step 20's listing
+    # --- posts (0001 + 0002's shrink/is_available + steps 20-21's listing
     # columns; the Divar-sourced columns are nullable because a post can be
-    # registered before its first listing sync) ---
+    # registered before its first listing sync; present_on_divar/is_available
+    # are the two single-owner flags — sync presence vs. seller toggle) ---
     op.create_table(
         "posts",
         sa.Column("post_token", sa.String(length=20), nullable=False),
         sa.Column("client_id", sa.Integer(), nullable=False),
         sa.Column(
             "is_available",
+            sa.Boolean(),
+            nullable=False,
+            server_default="true",
+        ),
+        sa.Column(
+            "present_on_divar",
             sa.Boolean(),
             nullable=False,
             server_default="true",

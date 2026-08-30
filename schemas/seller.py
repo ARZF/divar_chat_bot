@@ -20,6 +20,55 @@ class DashboardSummaryResponse(BaseModel):
     post_conversation_count: int
 
 
+class ListingListItem(BaseModel):
+    """One seller listing row (§3.8.1/§3.8.3, steps 20-21).
+
+    `client_id` is internal — never serialized. No price/status/url fields:
+    unsupported per the step 19 capability matrix. `present_on_divar` is the
+    sync's existence verdict; `is_available` is the seller's own chatbot
+    toggle (§3.8.4) — two independent flags, never conflated.
+    """
+
+    post_token: str
+    title: str | None
+    category: str | None
+    chat_enabled: bool | None
+    is_phone_hidden: bool | None
+    is_available: bool
+    present_on_divar: bool
+    last_synced_at: datetime | None
+
+
+class ListingListResponse(BaseModel):
+    """Paginated listing list with the paging metadata the UI needs."""
+
+    items: list[ListingListItem]
+    page: int
+    page_size: int
+    total: int
+    page_count: int
+
+
+class ListingAvailabilityUpdateRequest(BaseModel):
+    """Body for `PATCH /api/v1/seller/listings/{post_token}/availability`
+    (§3.8.4): the seller's chatbot-on/off toggle for one listing."""
+
+    is_available: bool
+
+
+class ListingSyncResponse(BaseModel):
+    """Result of `POST /api/v1/seller/listings/sync`.
+
+    `status="skipped"` means nothing was written: the seller has never
+    completed Divar OAuth (OTP-only) or their token refresh failed.
+    """
+
+    status: str
+    registered: int = 0
+    updated: int = 0
+    marked_absent: int = 0
+
+
 class ProductListItem(BaseModel):
     """One seller-facing product row (§3.7.1).
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import logging
 
+import httpx
 import pandas as pd
 from fastapi import (
     APIRouter,
@@ -34,6 +35,10 @@ from models.post_conversation import PostConversation
 from models.product import Product
 from schemas.seller import (
     DashboardSummaryResponse,
+    ListingAvailabilityUpdateRequest,
+    ListingListItem,
+    ListingListResponse,
+    ListingSyncResponse,
     ProductCreateRequest,
     ProductDetailResponse,
     ProductImportResponse,
@@ -41,6 +46,7 @@ from schemas.seller import (
     ProductListResponse,
     ProductUpdateRequest,
 )
+from services.divar_listings import sync_listings
 from services.price_lookup import load_prices_to_db, normalize_text, refresh_lookup_cache
 
 router = APIRouter()
@@ -85,6 +91,135 @@ async def dashboard_summary(
         post_count=await _count(Post),
         conversation_count=await _count(Conversation),
         post_conversation_count=await _count(PostConversation),
+    )
+
+
+@router.get("/api/v1/seller/listings", response_model=ListingListResponse)
+async def list_listings(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    client_id: int = Depends(get_current_client_id),
+    db: AsyncSession = Depends(get_db),
+) -> ListingListResponse:
+    """Paginated, tenant-scoped listing list (§3.8.1, §3.13).
+
+    Reads only what sync already persisted — this endpoint never calls
+    Divar: the API's rate limits are per-app (docs/scopes/README.md), so
+    syncing on every dashboard read would burn the quota all sellers
+    share. Refreshing is the seller's explicit action via
+    `POST /api/v1/seller/listings/sync`. An OTP-only seller (no OAuth
+    token, never synced) gets an honest empty list, not an error.
+    Pagination mirrors the products list (step 15).
+    """
+    conditions = [Post.client_id == client_id]
+
+    total = (
+        await db.execute(select(func.count()).select_from(Post).where(*conditions))
+    ).scalar_one()
+
+    rows = (
+        await db.execute(
+            select(Post)
+            .where(*conditions)
+            .order_by(Post.created_at.desc(), Post.post_token.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).scalars().all()
+
+    return ListingListResponse(
+        items=[
+            ListingListItem(
+                post_token=row.post_token,
+                title=row.title,
+                category=row.category,
+                chat_enabled=row.chat_enabled,
+                is_phone_hidden=row.is_phone_hidden,
+                is_available=row.is_available,
+                present_on_divar=row.present_on_divar,
+                last_synced_at=row.last_synced_at,
+            )
+            for row in rows
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+        page_count=(total + page_size - 1) // page_size,
+    )
+
+
+@router.post("/api/v1/seller/listings/sync", response_model=ListingSyncResponse)
+async def trigger_listing_sync(
+    client_id: int = Depends(get_current_client_id),
+    db: AsyncSession = Depends(get_db),
+) -> ListingSyncResponse:
+    """Refresh the authenticated seller's listings from Divar (step 20's
+    `sync_listings`, one user-posts GET per call).
+
+    The explicit counterpart to the read endpoint's read-only design: the
+    seller decides when to spend a Divar API call. `skipped` (never
+    completed Divar OAuth, or token refresh failed) writes nothing and is
+    not an error — the dashboard can show the stale state as-is. A Divar
+    outage surfaces as 502 (sync aborted before any write).
+    """
+    try:
+        summary = await sync_listings(db, client_id)
+    except httpx.HTTPError:
+        logger.warning(
+            "seller-triggered listing sync failed",
+            extra={"client_id": client_id},
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Divar listing sync failed; listings were not modified",
+        )
+    if summary is None:
+        return ListingSyncResponse(status="skipped")
+    return ListingSyncResponse(status="ok", **summary)
+
+
+@router.patch(
+    "/api/v1/seller/listings/{post_token}/availability",
+    response_model=ListingListItem,
+)
+async def update_listing_availability(
+    post_token: str,
+    body: ListingAvailabilityUpdateRequest,
+    client_id: int = Depends(get_current_client_id),
+    db: AsyncSession = Depends(get_db),
+) -> ListingListItem:
+    """Toggle the chatbot on/off for one of the seller's own listings
+    (§3.8.4).
+
+    Purely a local flag: this endpoint never calls Divar — `is_available`
+    is this project's own chatbot-availability toggle, never touched by
+    sync (which maintains the separate `present_on_divar`). The lookup is
+    always `post_token AND client_id` — never by token alone — so missing
+    and cross-tenant both return the same non-leaking 404 (§3.14).
+    """
+    listing = (
+        await db.execute(
+            select(Post).where(
+                Post.post_token == post_token, Post.client_id == client_id
+            )
+        )
+    ).scalar_one_or_none()
+    if listing is None:
+        raise HTTPException(status_code=404, detail="Listing not found")
+
+    listing.is_available = body.is_available
+    await db.commit()
+
+    return ListingListItem(
+        post_token=listing.post_token,
+        title=listing.title,
+        category=listing.category,
+        chat_enabled=listing.chat_enabled,
+        is_phone_hidden=listing.is_phone_hidden,
+        is_available=listing.is_available,
+        present_on_divar=listing.present_on_divar,
+        last_synced_at=listing.last_synced_at,
     )
 
 

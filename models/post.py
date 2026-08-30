@@ -1,12 +1,21 @@
 """Posts table — post_token → client ownership for conversation resolution,
 plus Divar-sourced listing metadata (title/category/chat flags/last_synced_at)
-fetched by services/divar_listings.py (step 20).
+fetched by services/divar_listings.py (steps 20-21).
 
-All Divar-sourced columns are written ONLY by that sync service, which also
-maintains `is_available` as the presence flag: True for posts present in the
-latest user-posts sync, False for this seller's posts the sync no longer
-returns. It remains the flag the chatbot/availability API treats as the
-source of truth (§3.8.4).
+Two single-owner flags, deliberately separate (a seller's manual chatbot
+toggle must survive syncs, and sync's presence verdict must survive manual
+toggles):
+
+* `present_on_divar` — written ONLY by the listing sync: True while the
+  latest user-posts response still contains the post, False once it is gone.
+* `is_available` — written ONLY by the seller's availability PATCH (§3.8.4):
+  whether the chatbot should handle this listing at all.
+
+Conversation resolution (chatbot_conversation / post_conversation) requires
+both: the chatbot answers only for a listing that still exists on Divar and
+whose seller has not disabled it. Whether the *item* is still for sale is
+not a posts field — it lives in the seller's products catalog, which the
+chatbot's answers already derive from.
 """
 from __future__ import annotations
 
@@ -30,7 +39,13 @@ class Post(Base):
         ForeignKey("clients.id", ondelete="CASCADE"),
         index=True,
     )
+    # Chatbot availability toggle (§3.8.4) — written ONLY by the seller's
+    # PATCH .../availability endpoint, never by sync.
     is_available: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
+    # Listing existence on Divar — written ONLY by services/divar_listings.py.
+    present_on_divar: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true", nullable=False
     )
 

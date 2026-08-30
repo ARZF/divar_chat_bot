@@ -6,10 +6,13 @@ docs/post/get_user_posts.md) — one request per sync, no per-post
 enrichment calls.
 
 `sync_listings` is the sole writer of the Divar-sourced `posts` columns
-(title/category/chat_enabled/is_phone_hidden/last_synced_at). A seller's
-post tokens enter `posts` only through this flow, which requires a
-completed Divar OAuth login: OTP-only sellers have no `oauth_tokens` row,
-so their listings are never inserted.
+(title/category/chat_enabled/is_phone_hidden/last_synced_at) and of
+`present_on_divar` (listing existence on Divar). It never writes
+`is_available` — that is the seller's own chatbot toggle (§3.8.4), set
+only via the availability PATCH. A seller's post tokens enter `posts`
+only through this flow, which requires a completed Divar OAuth login:
+OTP-only sellers have no `oauth_tokens` row, so their listings are never
+inserted.
 """
 from __future__ import annotations
 
@@ -57,11 +60,11 @@ async def sync_listings(db: AsyncSession, client_id: int) -> dict | None:
     written. Otherwise returns counts and commits:
 
     * posts present in the response → inserted (if new) or metadata-
-      refreshed, with ``is_available = True``;
-    * this seller's posts absent from the response → ``is_available =
+      refreshed, with ``present_on_divar = True``;
+    * this seller's posts absent from the response → ``present_on_divar =
       False``. Only rows owned by ``client_id`` are ever touched; a
       post_token already owned by another client is left exactly as it
-      is.
+      is. ``is_available`` (the seller's chatbot toggle) is never written.
     """
     oauth_token = (
         await db.execute(select(OAuthToken).where(OAuthToken.client_id == client_id))
@@ -98,13 +101,14 @@ async def sync_listings(db: AsyncSession, client_id: int) -> dict | None:
     tokens = list(by_token)
     now = datetime.now(timezone.utc)
 
-    # 1) Absent from this sync → unavailable. Scoped to this client's own
-    #    rows; an empty response marks all of them (the seller genuinely
-    #    has no listings on Divar).
-    unavailable = await db.execute(
+    # 1) Absent from this sync → no longer on Divar. Scoped to this
+    #    client's own rows; an empty response marks all of them (the
+    #    seller genuinely has no listings on Divar). is_available is never
+    #    touched — that flag belongs to the seller, not the sync.
+    absent = await db.execute(
         update(Post)
         .where(Post.client_id == client_id, Post.post_token.not_in(tokens))
-        .values(is_available=False)
+        .values(present_on_divar=False)
     )
 
     # 2) Refresh metadata on this seller's already-registered posts.
@@ -121,7 +125,7 @@ async def sync_listings(db: AsyncSession, client_id: int) -> dict | None:
         post.category = data.get("category")
         post.is_phone_hidden = data.get("is_phone_hidden")
         post.chat_enabled = data.get("supplier_chat_assistant_enabled")
-        post.is_available = True
+        post.present_on_divar = True
         post.last_synced_at = now
 
     # 3) Insert newly seen tokens (register_posts' ownership pattern:
@@ -142,7 +146,7 @@ async def sync_listings(db: AsyncSession, client_id: int) -> dict | None:
                         "chat_enabled": by_token[token].get(
                             "supplier_chat_assistant_enabled"
                         ),
-                        "is_available": True,
+                        "present_on_divar": True,
                         "last_synced_at": now,
                     }
                     for token in tokens
@@ -158,7 +162,7 @@ async def sync_listings(db: AsyncSession, client_id: int) -> dict | None:
     summary = {
         "registered": registered,
         "updated": len(own_posts),
-        "marked_unavailable": unavailable.rowcount,
+        "marked_absent": absent.rowcount,
     }
     logger.info("listing sync completed", extra={"client_id": client_id, **summary})
     return summary

@@ -114,13 +114,22 @@ async def _resolve_new_conversation(
     if touchpoint not in ("MY_POST", "DEMAND_POST") or not token:
         return None
 
-    # Look up post_token → client_id (WHERE scoped to post_token PK)
-    stmt = select(Post.client_id).where(Post.post_token == token)
+    # Look up post_token → client_id (WHERE scoped to post_token PK). The
+    # chatbot only handles listings that still exist on Divar AND whose
+    # seller has not disabled the chatbot — both flags are false for a
+    # foreign token owner exactly like an unregistered one: silent skip.
+    stmt = select(Post.client_id).where(
+        Post.post_token == token,
+        Post.present_on_divar.is_(True),
+        Post.is_available.is_(True),
+    )
     result = await db.execute(stmt)
     resolved_client_id = result.scalar_one_or_none()
 
     if resolved_client_id is None:
-        return None  # Post not registered by any seller
+        # Not registered by any seller, no longer on Divar, or chatbot
+        # disabled by the seller — all resolve to no chatbot handling.
+        return None
 
     # Atomic upsert: INSERT ... ON CONFLICT DO NOTHING.
     # The named composite constraint covers legitimate redelivery only — same

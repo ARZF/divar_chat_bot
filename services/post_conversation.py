@@ -138,14 +138,21 @@ async def handle_post_bot_reply(
     )
 
     async with AsyncSessionLocal() as db:
+        # The chatbot only handles listings that still exist on Divar AND
+        # whose seller has not disabled it — a token failing either check
+        # resolves to nothing, same as an unregistered one.
         client_id = (
             await db.execute(
-                select(Post.client_id).where(Post.post_token == post_token)
+                select(Post.client_id).where(
+                    Post.post_token == post_token,
+                    Post.present_on_divar.is_(True),
+                    Post.is_available.is_(True),
+                )
             )
         ).scalar_one_or_none()
         if client_id is None:
             logger.warning(
-                "NEW_MESSAGE post_token did not resolve to a client",
+                "NEW_MESSAGE post_token did not resolve to an active listing",
                 extra={
                     "post_token": post_token,
                     "conversation_id": conversation_id,
