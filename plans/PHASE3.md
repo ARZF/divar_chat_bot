@@ -1234,11 +1234,16 @@ The web/API layer must not contain raw Divar HTTP calls.
 
 ## 3.8.2 Listing model
 
+> **Superseded (maintainer-approved, 2026-08-29):** listing metadata was folded
+> into `posts` via the squashed baseline migration instead of a separate
+> `listings` table; `posts`' conversation-resolution role is unchanged.
+> See CHANGELOG.md 2026-08-29 (step 20 and the migration-squash entry).
+
 Only add additional DB fields/models after the Divar API contract is verified.
 
-If persistent listing metadata is required, design it as a separate
+~~If persistent listing metadata is required, design it as a separate
 seller-scoped model rather than corrupting the existing `posts` resolution
-model.
+model.~~
 
 Possible future model:
 

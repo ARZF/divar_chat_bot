@@ -382,6 +382,15 @@ dashboard image upload. Explicitly mark unsupported operations. Do not guess.
 **Stop:** without this approval, steps 20–22 do not begin. **Commit:**
 `docs(plans): record verified divar listing capabilities`.
 
+**As built (2026-08-29):** matrix approved in-session — only
+`GET /v1/open-platform/finder/user-posts` (scope `USER_POSTS_GET`) is
+supported, returning token/title/images/`is_phone_hidden`/
+`supplier_chat_assistant_enabled`/category. No details, status, update,
+delete/deactivate, or URL/seo-slug endpoint exists. Image upload (§3.8.5) was
+not verified end-to-end and stays deferred. The matrix was recorded in the
+CHANGELOG step 20/21 entries and `docs/post/get_user_posts.md`, not as a
+separate plan document, so the `docs(plans)` commit above never happened.
+
 ### 20. Implement only supported listing data/service behavior
 
 **Depends on:** 19. **Scope:** add a `services/divar_listings.py` service only
@@ -392,6 +401,18 @@ is conversation resolution. Include indexes and reversible migration handling.
 **Accept:** no raw Divar HTTP in route/template/JS; persisted metadata matches
 the approved contract only; existing posts semantics remain intact. **Commit:**
 `feat(listings): add verified divar listing service`.
+
+**As built (2026-08-29), maintainer-approved deviation:** the "never repurpose
+`posts`" instruction was superseded the same day — the listing metadata
+columns (`title`, `category`, `chat_enabled`, `is_phone_hidden`,
+`last_synced_at`, later `present_on_divar`) were folded into `posts` via the
+squashed baseline migration instead of a new `listings` table; `posts`'
+conversation-resolution role is unchanged. `POST /seller/posts` was retired:
+`post_token` rows now enter `posts` only through
+`services/divar_listings.sync_listings`, which requires a completed OAuth
+login and reuses the `ON CONFLICT (post_token) DO NOTHING` ownership pattern.
+`/oauth/start` gained the `USER_POSTS_GET` scope. See CHANGELOG 2026-08-29
+(step 20 and the migration-squash entry).
 
 ### 21. Add availability and supported listing APIs
 
@@ -404,6 +425,20 @@ step 19 confirms the end-to-end dashboard flow.
 actions are absent; upload has validation/limits if present. **Commit:**
 `feat(listings): add seller listing api`.
 
+**As built (2026-08-30):** `register_posts` no longer exists (retired in step
+20); the availability PATCH scopes its lookup as `post_token AND client_id`,
+so missing and cross-tenant both return the same non-leaking 404 — the same
+ownership guarantee the retired endpoint provided. A `present_on_divar`
+column splits listing presence from `is_available`: sync writes only
+`present_on_divar`, the PATCH writes only `is_available` (the seller's
+chatbot on/off toggle), and conversation resolution requires both flags.
+Three endpoints shipped: `GET /api/v1/seller/listings` (read-only, never
+calls Divar — per-app rate limits forbid sync-on-read),
+`POST /api/v1/seller/listings/sync` (the explicit refresh trigger the
+read-only design requires), and the availability PATCH. Image upload was not
+implemented — step 19 did not verify the end-to-end flow. See CHANGELOG
+2026-08-30 (step 21).
+
 ### 22. Build listings UI and approve capabilities — **review gate**
 
 **Depends on:** 21. **Scope:** list title/status/price only when supplied by the
@@ -415,6 +450,16 @@ tenant tests pass; visual design uses a scan-friendly marketplace-management
 table/list. **Stop:** do
 not silently broaden the verified capability matrix. **Commit:**
 `feat(web): add seller listings page`.
+
+**As built (2026-08-31, commit `eab1780`):** the page renders only verified
+fields — title, Divar presence, Divar chat-assistant flag, phone-hidden,
+last sync, the availability toggle, and a token-only Divar link
+(`https://divar.ir/v/{post_token}`, because no seo-slug endpoint was
+verified in step 19). Price, lifecycle status, edit, and delete are not
+rendered. Data loads client-side through the step 21 APIs (step 12
+convention). **The F5 review gate is not yet recorded** — complete the
+universal visual/security gates and the Supervisor closeout record below
+before opening step 23, which depends on F5.
 
 ---
 
