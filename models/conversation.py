@@ -40,6 +40,14 @@ class Conversation(Base):
         index=True,
     )
     divar_conversation_id: Mapped[str] = mapped_column(String(255))
+    # Step 23: the listing this chatbot conversation belongs to. The BOT
+    # system (NEW_CHATBOT_MESSAGE) resolves /start MY_POST/DEMAND_POST to a
+    # client_id at first contact but previously dropped the token; persisting
+    # it here makes a buyer conversation resolvable back to its `posts` row,
+    # matching what post_conversations.post_token already does for the POST
+    # system. Nullable because `conversations` predates the mapping and the
+    # only writer (_resolve_new_conversation) always sets it for real rows.
+    post_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
     current_state: Mapped[str] = mapped_column(
     String(50),
     default=ConversationState.START.value,

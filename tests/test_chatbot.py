@@ -1314,3 +1314,292 @@ async def test_unresolved_send_failure_does_not_raise(monkeypatch, bot, caplog):
 
     assert sent == [settings.UNRESOLVED_CLIENT_MESSAGE]
     assert any(r.levelno >= logging.ERROR for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Step 23: conversation-system mapping contract
+#
+# Two buyer-conversation systems must map to the correct seller listing
+# without leaking across tenants:
+#   * BOT  conversations (`conversations`)          — /start MY_POST/DEMAND_POST
+#     touchpoints, NEW_CHATBOT_MESSAGE webhook. The listing token is now
+#     persisted (post_token) so the conversation resolves back to its post.
+#   * POST conversations (`post_conversations`)     — NEW_MESSAGE webhook,
+#     post_token taken from the payload and persisted.
+# The tests pin the Step 23 contract: classification, listing resolution,
+# tenant isolation, idempotent reuse, soft-sync, availability, chat_enabled
+# separation, missing-post fail-safe, and the OAuth boundary.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bot_conversation_persists_its_post_token(db, seeded_post, sqlite_upsert):
+    """A buyer chatbot conversation resolves to its listing: the post_token
+    resolved from /start is persisted on the conversation row, so the chain
+    conversation -> posts.post_token -> client_id survives the first contact."""
+    client, post = seeded_post
+    resolved = await chatbot._resolve_new_conversation(
+        db, "bot-conv-mapped", f"/start MY_POST {post.post_token}"
+    )
+    assert resolved is not None
+    conv = (
+        await db.execute(
+            select(Conversation).where(
+                Conversation.divar_conversation_id == "bot-conv-mapped"
+            )
+        )
+    ).scalar_one()
+    assert conv.post_token == post.post_token
+    assert conv.client_id == client.id
+
+
+@pytest.mark.asyncio
+async def test_post_conversation_persists_its_post_token(
+    monkeypatch, session_factory, seeded_post, sqlite_upsert
+):
+    """The POST system already persists post_token; pin it so the mapping
+    contract holds for both systems symmetrically."""
+    client, post = seeded_post
+    async with session_factory() as db:
+        db.add(
+            OAuthToken(
+                client_id=client.id,
+                divar_access_token="access-token",
+                divar_refresh_token="refresh-token",
+                token_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+            )
+        )
+        await db.commit()
+    _patch_session_local(monkeypatch, lambda: session_factory())
+    monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", AsyncMock())
+
+    await chatbot.handle_post_bot_reply(
+        "post-conv-mapped", post.post_token, "hello", "m1"
+    )
+
+    async with session_factory() as verify:
+        conv = (
+            await verify.execute(
+                select(PostConversation).where(
+                    PostConversation.divar_conversation_id == "post-conv-mapped"
+                )
+            )
+        ).scalar_one()
+    assert conv.post_token == post.post_token
+    assert conv.client_id == client.id
+
+
+@pytest.mark.asyncio
+async def test_two_conversation_systems_stay_separate(
+    monkeypatch, session_factory, seeded_post, sqlite_upsert
+):
+    """BOT resolution writes only `conversations`, POST resolution only
+    `post_conversations` — neither system is surfaced as the other, and each
+    row carries its own listing token."""
+    client, post = seeded_post
+    async with session_factory() as s:
+        s.add(
+            OAuthToken(
+                client_id=client.id,
+                divar_access_token="access-token",
+                divar_refresh_token="refresh-token",
+                token_expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+            )
+        )
+        await s.commit()
+        assert await chatbot._resolve_new_conversation(
+            s, "bot-only", f"/start MY_POST {post.post_token}"
+        ) is not None
+        await s.commit()
+
+    _patch_session_local(monkeypatch, lambda: session_factory())
+    monkeypatch.setattr(chatbot.divar_service, "send_supplier_message", AsyncMock())
+    await chatbot.handle_post_bot_reply("post-only", post.post_token, "hello", "m1")
+
+    async with session_factory() as verify:
+        bots = (await verify.execute(select(Conversation))).scalars().all()
+        post_convs = (await verify.execute(select(PostConversation))).scalars().all()
+    assert [c.divar_conversation_id for c in bots] == ["bot-only"]
+    assert [p.divar_conversation_id for p in post_convs] == ["post-only"]
+    assert bots[0].post_token == post.post_token
+    assert post_convs[0].post_token == post.post_token
+    assert bots[0].client_id == post_convs[0].client_id == client.id
+
+
+@pytest.mark.asyncio
+async def test_redelivered_start_keeps_original_post_token(
+    db, seeded_post, sqlite_upsert
+):
+    """Idempotent reuse: a redelivered /start that loses the insert race returns
+    the same row with its original listing mapping — never a duplicate."""
+    client, post = seeded_post
+    start = f"/start MY_POST {post.post_token}"
+    first = await chatbot._resolve_new_conversation(db, "bot-reuse", start)
+    second = await chatbot._resolve_new_conversation(db, "bot-reuse", start)
+    assert first[1] is True
+    assert second[1] is False
+    assert second[0].post_token == post.post_token
+    assert second[0].client_id == client.id
+    assert (
+        await db.execute(select(Conversation).where(Conversation.divar_conversation_id == "bot-reuse"))
+    ).scalars().one().post_token == post.post_token
+
+
+@pytest.mark.asyncio
+async def test_cross_client_claim_does_not_remap_owner_post_token(
+    monkeypatch, bot, seeded_post, sqlite_upsert, catalog, session_factory
+):
+    """Tenant isolation: a second client claiming an owned divar_conversation_id
+    with their own token must fail safe and leave the owner's listing mapping
+    untouched (the owner's post_token is never swapped for the claimant's)."""
+    client_a, post_a = seeded_post
+    async with session_factory() as setup:
+        client_b = Client(phone_number="09120000002")
+        setup.add(client_b)
+        await setup.flush()
+        setup.add(Post(post_token="OTHER_TOKEN", client_id=client_b.id))
+        await setup.commit()
+
+    await bot.say(f"/start MY_POST {post_a.post_token}", conversation_id="conv-map")
+    monkeypatch.setattr(
+        chatbot_conversation, "_lookup_conversation", AsyncMock(return_value=None)
+    )
+    await bot.say("/start MY_POST OTHER_TOKEN", conversation_id="conv-map")
+
+    async with session_factory() as verify:
+        conv = (
+            await verify.execute(
+                select(Conversation).where(
+                    Conversation.divar_conversation_id == "conv-map"
+                )
+            )
+        ).scalar_one()
+    assert conv.client_id == client_a.id
+    assert conv.post_token == post_a.post_token
+
+
+@pytest.mark.asyncio
+async def test_present_on_divar_false_keeps_conversation_and_mapping(
+    db, session_factory, seeded_post, sqlite_upsert
+):
+    """Soft-sync: a listing marked absent by the latest sync must not delete
+    the conversation or its post_token mapping. The gate lives at NEW
+    resolution only — identity and mapping survive."""
+    client, post = seeded_post
+    await chatbot._resolve_new_conversation(
+        db, "bot-soft", f"/start MY_POST {post.post_token}"
+    )
+    await db.commit()
+
+    post.present_on_divar = False
+    await db.commit()
+
+    async with session_factory() as verify:
+        conv = (
+            await verify.execute(
+                select(Conversation).where(
+                    Conversation.divar_conversation_id == "bot-soft"
+                )
+            )
+        ).scalar_one()
+        post_row = (
+            await verify.execute(
+                select(Post).where(Post.post_token == post.post_token)
+            )
+        ).scalar_one()
+    assert conv.post_token == post.post_token
+    assert conv.client_id == client.id
+    assert post_row.present_on_divar is False
+
+
+@pytest.mark.asyncio
+async def test_is_available_false_gates_new_but_keeps_existing_identity(
+    db, session_factory, seeded_post, sqlite_upsert
+):
+    """Availability is a chatbot-behavior toggle, not conversation identity:
+    turning it off stops NEW conversations from resolving, but the existing
+    conversation row and its listing mapping stay intact."""
+    client, post = seeded_post
+    await chatbot._resolve_new_conversation(
+        db, "bot-avail", f"/start MY_POST {post.post_token}"
+    )
+    await db.commit()
+
+    post.is_available = False
+    await db.commit()
+
+    async with session_factory() as verify:
+        conv = (
+            await verify.execute(
+                select(Conversation).where(
+                    Conversation.divar_conversation_id == "bot-avail"
+                )
+            )
+        ).scalar_one()
+        post_row = (
+            await verify.execute(
+                select(Post).where(Post.post_token == post.post_token)
+            )
+        ).scalar_one()
+    assert conv.post_token == post.post_token
+    assert conv.client_id == client.id
+    assert post_row.is_available is False
+
+    fresh = await chatbot._resolve_new_conversation(
+        db, "bot-avail-new", f"/start MY_POST {post.post_token}"
+    )
+    assert fresh is None
+
+
+@pytest.mark.asyncio
+async def test_chat_enabled_false_does_not_gate_resolution(
+    db, seeded_post, sqlite_upsert
+):
+    """chat_enabled is Divar's own supplier-chat-assistant flag (step 20
+    metadata), not the seller's availability toggle. It must not gate
+    conversation resolution — only present_on_divar and is_available do."""
+    client, post = seeded_post
+    post.chat_enabled = False
+    await db.commit()
+
+    resolved = await chatbot._resolve_new_conversation(
+        db, "bot-chatflag", f"/start MY_POST {post.post_token}"
+    )
+    assert resolved is not None
+    assert resolved[0].post_token == post.post_token
+    assert resolved[0].client_id == client.id
+
+
+@pytest.mark.asyncio
+async def test_unknown_token_persists_nothing_in_either_system(
+    db, seeded_post, sqlite_upsert
+):
+    """Missing post: an unregistered token resolves to nothing, and crucially
+    no partial row — no fabricated conversation or post_token — is written in
+    either conversation system."""
+    assert await chatbot._resolve_new_conversation(
+        db, "bot-unknown", "/start MY_POST NOT_A_REAL_TOKEN"
+    ) is None
+    assert (await db.execute(select(Conversation))).scalars().all() == []
+    assert (await db.execute(select(PostConversation))).scalars().all() == []
+    assert (await db.execute(select(PostMessage))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_otp_only_seller_has_no_listings_and_no_resolution(session_factory):
+    """OAuth boundary: an OTP-only seller (never completed Divar OAuth) has no
+    oauth_tokens row, so sync never runs and no posts are fabricated — with no
+    posts, no buyer conversation can ever resolve to such a seller."""
+    from services.divar_listings import sync_listings
+
+    async with session_factory() as s:
+        seller = Client(phone_number="09120000003")
+        s.add(seller)
+        await s.commit()
+
+        assert await sync_listings(s, seller.id) is None
+        assert (await s.execute(select(Post))).scalars().all() == []
+        assert await chatbot._resolve_new_conversation(
+            s, "bot-otp", "/start MY_POST ANY_TOKEN"
+        ) is None
+        assert (await s.execute(select(Conversation))).scalars().all() == []

@@ -137,11 +137,15 @@ async def _resolve_new_conversation(
     # divar_conversation_id conflicts against the global UNIQUE
     # uq_conversations_divar_conversation_id instead, which DO NOTHING
     # does not swallow: it raises IntegrityError below.
+    # post_token is persisted so the buyer conversation stays resolvable back
+    # to its listing (step 23) — the same mapping the POST system already
+    # stores on post_conversations.post_token.
     insert_stmt = (
         pg_insert(Conversation)
         .values(
             client_id=resolved_client_id,
             divar_conversation_id=divar_conversation_id,
+            post_token=token,
             current_state=ConversationState.START.value,
         )
         .on_conflict_do_nothing(

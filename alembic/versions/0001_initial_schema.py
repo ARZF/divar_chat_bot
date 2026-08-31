@@ -18,6 +18,9 @@ the Divar-sourced metadata (title, category, chat_enabled, is_phone_hidden,
 last_synced_at — all nullable, written only by services/divar_listings.py),
 `present_on_divar` (sync-owned listing existence on Divar), and
 `is_available` (seller-owned chatbot toggle, §3.8.4 — never written by sync).
+Step 23 folds `conversations.post_token` (nullable): the listing a BOT
+conversation belongs to, so buyer chatbot conversations stay resolvable to
+their `posts` row (mirrors post_conversations.post_token).
 
 The history was collapsed because NO migration in the old chain has ever run
 against a real production database: the project is pre-production and the
@@ -243,6 +246,10 @@ def upgrade() -> None:
         sa.Column(
             "divar_conversation_id", sa.String(length=255), nullable=False
         ),
+        # Step 23: the listing a BOT conversation belongs to (mirrors
+        # post_conversations.post_token). Nullable; the only writer,
+        # _resolve_new_conversation, always sets it for real rows.
+        sa.Column("post_token", sa.String(length=255), nullable=True),
         sa.Column(
             "current_state",
             sa.String(length=50),
