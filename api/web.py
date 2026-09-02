@@ -108,3 +108,22 @@ async def dashboard_listings(request: Request) -> HTMLResponse:
         "dashboard/listings.html",
         {"dashboard_nav_active": "listings"},
     )
+
+
+@router.get("/dashboard/conversations", response_class=HTMLResponse)
+async def dashboard_conversations(request: Request) -> HTMLResponse:
+    """Render the conversations page (§3.9.2).
+
+    Same step 12 convention: the shell renders anonymously — no conversation
+    data, no auth — and static/js/conversations.js loads everything
+    client-side. The seller-facing Conversations feature covers ONLY the
+    supplier-side Divar conversations (step 24's
+    `/api/v1/seller/post-conversations*` APIs); the Buyer↔Bot system has no
+    endpoints here and is not represented. Read-only viewer — sending and
+    state mutations are later work.
+    """
+    return templates.TemplateResponse(
+        request,
+        "dashboard/conversations.html",
+        {"dashboard_nav_active": "conversations"},
+    )

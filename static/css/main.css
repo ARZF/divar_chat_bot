@@ -613,6 +613,162 @@ td.num {
   display: none;
 }
 
+/* --- Conversations (step 25) --------------------------------------------- */
+
+/* Split workspace: conversation list + selected conversation (§3.9.2). Not a
+   card grid — two bordered panes; plain rows carry the list, chat bubbles
+   carry the history. */
+.conversations-layout {
+  display: grid;
+  grid-template-columns: minmax(16rem, 22rem) 1fr;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.conversation-list-pane,
+.conversation-detail-pane {
+  border: var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.conversation-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conversation-item {
+  display: grid;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-3);
+  border: 0;
+  border-block-end: var(--border);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.conversation-list li:last-child .conversation-item {
+  border-block-end: 0;
+}
+
+.conversation-item:hover {
+  background: var(--surface-sunken);
+}
+
+.conversation-item[aria-current] {
+  background: var(--accent-soft);
+}
+
+.conversation-item-title {
+  font-weight: 700;
+}
+
+/* One-line preview: the latest message, clipped, never wrapping the list. */
+.conversation-item-preview {
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-item-meta {
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.conversation-list-pane .state,
+.conversation-list-pane .pagination,
+.conversation-detail-pane .state,
+.conversation-detail-pane .alert {
+  margin: var(--space-3);
+}
+
+.conversation-list-pane .pagination,
+.conversation-detail-pane .pagination {
+  border-block-start: var(--border);
+}
+
+/* Back-to-list control: only shown on mobile with a selection open. */
+.conversation-back {
+  display: none;
+}
+
+.conversation-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-block-end: var(--border);
+}
+
+.conversation-header h2 {
+  margin: 0;
+}
+
+.conversation-meta {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-block-end: var(--border);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  list-style: none;
+}
+
+.message-bubble {
+  max-width: 75%;
+  padding: var(--space-2) var(--space-3);
+  border: var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+/* Logical properties keep the sides correct in RTL: the buyer's messages
+   start at the inline-start edge, the assistant's at the inline-end edge. */
+.message {
+  display: flex;
+}
+
+.message-buyer {
+  justify-content: flex-start;
+}
+
+.message-buyer .message-bubble {
+  background: var(--surface-sunken);
+}
+
+.message-bot {
+  justify-content: flex-end;
+}
+
+.message-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.message-meta {
+  margin: 0;
+  margin-block-start: var(--space-1);
+  color: var(--ink-soft);
+  font-size: var(--text-sm);
+}
+
 /* --- Dashboard shell --------------------------------------------------- */
 
 /* Two-column workspace: fixed sidebar nav + main column. Not a card grid —
@@ -788,6 +944,34 @@ td.num {
   .table-stack td.cell-actions {
     justify-content: flex-start;
     margin-block-start: var(--space-2);
+  }
+
+  /* Conversations: deliberate list → detail navigation instead of squeezing
+     the split view — unselected shows only the list; a selection replaces it
+     with the detail pane plus a back control. Desktop keeps both panes. */
+  .conversations-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .conversation-detail-pane {
+    display: none;
+  }
+
+  .conversations-layout.conversations-selected .conversation-list-pane {
+    display: none;
+  }
+
+  .conversations-layout.conversations-selected .conversation-detail-pane {
+    display: block;
+  }
+
+  .conversations-layout.conversations-selected .conversation-back {
+    display: inline-block;
+    margin: var(--space-3);
+  }
+
+  .message-bubble {
+    max-width: 100%;
   }
 }
 

@@ -758,3 +758,176 @@ def test_listings_css_marks_absent_rows_informationally():
     assert ".toggle-error" in css
     assert ".toggle-error[hidden]" in css
     assert ".cell-sub" in css
+
+
+# --------------------------------------------------------------------------------------
+# Conversations page (Phase 3 step 25)
+# --------------------------------------------------------------------------------------
+
+def test_conversations_page_renders_anonymously_with_shared_assets_and_states():
+    with TestClient(app) as c:
+        response = c.get("/dashboard/conversations")
+
+    html = response.text
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert response.text.count("<!doctype html>") == 1
+    assert 'lang="fa"' in html
+    assert 'dir="rtl"' in html
+    assert 'src="/static/js/session.js"' in html
+    assert 'src="/static/js/conversations.js"' in html
+    assert 'aria-label="ناوبری میزکار فروشنده"' in html
+    # Conversations is the current page in the shared nav — exactly one marker.
+    assert html.count('aria-current="page"') == 1
+    assert 'href="/dashboard/conversations" aria-current="page"' in html
+    # The list states exist: loading, error (with retry), data, empty.
+    assert 'id="conversations-loading"' in html
+    assert 'id="conversations-error"' in html
+    assert 'id="conversations-retry"' in html
+    assert 'id="conversations-data"' in html
+    assert 'id="conversation-list"' in html
+    assert 'role="alert"' in html
+    # Useful generic empty state — not an error implication.
+    assert "هنوز گفتگویی وجود ندارد" in html
+    assert "گفتگوهای خریداران دربارهٔ آگهی‌های شما اینجا نمایش داده می‌شود" in html
+    # Detail pane states: placeholder, loading, error with retry, open area.
+    assert 'id="conversation-placeholder"' in html
+    assert "یک گفتگو را از فهرست انتخاب کنید" in html
+    assert 'id="conversation-loading"' in html
+    assert 'id="conversation-error"' in html
+    assert 'id="conversation-retry"' in html
+    assert 'id="conversation-open"' in html
+    assert 'id="conversation-back"' in html
+    assert "بازگشت به فهرست" in html
+    # Listing context, state, and message history hooks.
+    assert 'id="conversation-listing-title"' in html
+    assert 'id="conversation-state"' in html
+    assert 'id="messages-list"' in html
+    assert 'id="messages-empty"' in html
+    assert 'aria-label="صفحه‌بندی گفتگوها"' in html
+    assert 'aria-label="صفحه‌بندی پیام‌ها"' in html
+    # Read-only viewer: no compose/send box, no mark-read, no archive/delete.
+    for mutation in ("ارسال پیام", "پاسخ", "خوانده شد", "بایگانی", "حذف"):
+        assert mutation not in html
+
+
+def test_conversations_page_exposes_no_auth_or_seller_secrets():
+    with TestClient(app) as c:
+        html = c.get("/dashboard/conversations").text.lower()
+
+    for forbidden in (
+        "client_id",
+        "seller_id",
+        "access_token",
+        "refresh_token",
+        "otp_hash",
+        "client_secret",
+        "jwt_secret",
+        "password",
+    ):
+        assert forbidden not in html
+
+
+def test_conversations_script_uses_only_post_conversation_apis():
+    with TestClient(app) as c:
+        response = c.get("/static/js/conversations.js")
+
+    js = response.text
+    assert response.status_code == 200
+    assert "javascript" in response.headers["content-type"]
+    # All authenticated traffic goes through the shared session module only.
+    assert "window.DivarSession.authFetch" in js
+    assert "window.DivarSession.logout" in js
+    assert 'const LIST_URL = "/api/v1/seller/post-conversations"' in js
+    # The step 24 cleanup: ONLY the supplier-side (post_conversations) APIs
+    # are consumed — the removed Buyer↔Bot seller APIs must not reappear.
+    assert "/seller/conversations" not in js
+    # No raw fetch, no duplicated refresh/retry/redirect logic, no page-level
+    # navigation (the ?conversation= deep link uses history.replaceState).
+    assert "fetch(" not in js.replace("authFetch(", "")
+    assert "/auth/refresh" not in js
+    assert "/auth/logout" not in js
+    assert "window.location.assign" not in js
+    assert "window.location.replace" not in js
+    # Read-only viewer: GET requests only — no message sending, no state
+    # mutation, no realtime transport of any kind.
+    assert 'method: "POST"' not in js
+    assert 'method: "PATCH"' not in js
+    assert 'method: "PUT"' not in js
+    assert "DELETE" not in js
+    assert "WebSocket" not in js
+    assert "EventSource" not in js
+    assert "sendMessage" not in js
+    # Exactly the step 24 field contract is rendered — nothing fabricated,
+    # no sensitive or internal fields.
+    for field in (
+        "conversation_id",
+        "listing_title",
+        "current_state",
+        "created_at",
+        "updated_at",
+        "last_message",
+        "sender_type",
+        "text_content",
+        "sent_at",
+        "page_count",
+    ):
+        assert field in js
+    # A conversation with no valid listing mapping is still displayed, with
+    # a neutral fallback — never hidden, never fabricated.
+    assert "آگهی در دسترس نیست" in js
+    # Chronological backend order is rendered as received — never reversed.
+    assert "reverse()" not in js
+    # Backend pagination contract respected: page numbers are requested, the
+    # default page_size is used (no oversized/unbounded fetch).
+    assert 'params.set("page"' in js
+    assert "page_size" not in js
+    # Missing/invalid conversation: same non-leaking 404 message, selection
+    # cleared, nothing exposed about *why* it is missing (§3.14).
+    assert "response.status === 404" in js
+    assert "این گفتگو پیدا نشد." in js
+    # Selected conversation state is representable in the URL without a
+    # router (deep link via query param, replaceState not pushState).
+    assert 'new URLSearchParams(window.location.search)' in js
+    assert "history.replaceState" in js
+    assert "history.pushState" not in js
+    for forbidden in (
+        "localStorage",
+        "sessionStorage",
+        "document.cookie",
+        "setItem",
+        "innerHTML",
+        "insertAdjacentHTML",
+        "console.",
+        "client_id",
+        "eval(",
+        "post_token",
+        "divar_conversation_id",
+    ):
+        assert forbidden not in js
+
+
+def test_conversations_css_adds_split_view_and_mobile_navigation():
+    with TestClient(app) as c:
+        response = c.get("/static/css/main.css")
+
+    css = response.text
+    assert response.status_code == 200
+    # Desktop split view: list pane + detail pane on the shared grid language.
+    assert ".conversations-layout" in css
+    assert "grid-template-columns: minmax(16rem, 22rem) 1fr" in css
+    # Selected conversation rows use the existing accent treatment.
+    assert ".conversation-item[aria-current]" in css
+    # Sender sides are distinguished with logical (RTL-safe) properties.
+    assert ".message-buyer" in css
+    assert ".message-bot" in css
+    assert "justify-content: flex-start" in css
+    assert "justify-content: flex-end" in css
+    # The list → detail mobile navigation lives INSIDE the existing 40rem
+    # breakpoint (no new breakpoint), and the desktop prefix stays two-pane.
+    mobile_block = css.split("@media (max-width: 40rem)")[1]
+    assert ".conversations-layout.conversations-selected .conversation-list-pane" in mobile_block
+    assert ".conversations-layout.conversations-selected .conversation-detail-pane" in mobile_block
+    assert ".conversation-back" in mobile_block
+    desktop_block = css.split("@media (max-width: 40rem)")[0]
+    assert ".conversations-selected" not in desktop_block

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block title %}گفتگوها | دستیار فروش دیوار{% endblock %}
+
+{% block content %}
+<div class="container dashboard-layout">
+  {% include "partials/dashboard_nav.html" %}
+
+  <div class="dashboard-main">
+    <header class="page-header" aria-labelledby="conversations-title">
+      <div>
+        <h1 id="conversations-title">گفتگوها</h1>
+        <p class="page-title-note">گفتگوهای خریداران دربارهٔ آگهی‌های شما؛ داده‌ها پس از ورود بارگذاری می‌شود.</p>
+      </div>
+      <button type="button" class="btn" data-conversations-logout>خروج از حساب</button>
+    </header>
+
+    <div id="conversations-loading" class="state state-loading">در حال بارگذاری گفتگوها…</div>
+
+    <div id="conversations-error" class="alert alert-error" role="alert" hidden>
+      <div>
+        <p>بارگذاری گفتگوها انجام نشد.</p>
+        <p><button type="button" class="btn btn-sm" id="conversations-retry">تلاش دوباره</button></p>
+      </div>
+    </div>
+
+    <div id="conversations-data" hidden>
+      <div id="conversations-layout" class="conversations-layout">
+        <section class="conversation-list-pane" aria-label="فهرست گفتگوها">
+          <ol id="conversation-list" class="conversation-list"></ol>
+          <div id="conversations-empty" class="state" hidden>
+            <p>هنوز گفتگویی وجود ندارد.</p>
+            <p>گفتگوهای خریداران دربارهٔ آگهی‌های شما اینجا نمایش داده می‌شود.</p>
+          </div>
+          <nav id="conversations-pagination" class="pagination" aria-label="صفحه‌بندی گفتگوها" hidden></nav>
+        </section>
+
+        <section class="conversation-detail-pane" aria-label="گفتگوی انتخاب‌شده">
+          <button type="button" class="btn btn-sm conversation-back" id="conversation-back">بازگشت به فهرست</button>
+
+          <div id="conversation-placeholder" class="state">
+            <p>برای دیدن پیام‌ها، یک گفتگو را از فهرست انتخاب کنید.</p>
+          </div>
+
+          <div id="conversation-loading" class="state state-loading" hidden>در حال بارگذاری پیام‌ها…</div>
+
+          <div id="conversation-error" class="alert alert-error" role="alert" hidden>
+            <div>
+              <p id="conversation-error-text">بارگذاری گفتگو انجام نشد.</p>
+              <p><button type="button" class="btn btn-sm" id="conversation-retry" hidden>تلاش دوباره</button></p>
+            </div>
+          </div>
+
+          <div id="conversation-open" hidden>
+            <header class="conversation-header">
+              <h2 id="conversation-listing-title"></h2>
+              <span id="conversation-state" class="status"></span>
+            </header>
+            <p id="conversation-meta" class="conversation-meta"></p>
+            <ol id="messages-list" class="messages" aria-label="پیام‌های این گفتگو"></ol>
+            <div id="messages-empty" class="state" hidden>پیامی در این گفتگو ثبت نشده است.</div>
+            <nav id="messages-pagination" class="pagination" aria-label="صفحه‌بندی پیام‌ها" hidden></nav>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/conversations.js"></script>
+{% endblock %}
