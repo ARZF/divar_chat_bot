@@ -64,7 +64,11 @@ async def test_register_event_subscription_success(httpx_mock):
 async def test_register_event_subscription_failure_logs_and_reraises(
     httpx_mock, caplog
 ):
-    httpx_mock.post(SUBSCRIPTION_URL).respond(500, text="subscription failed")
+    httpx_mock.post(SUBSCRIPTION_URL).respond(
+        403,
+        text="subscription denied",
+        headers={"Content-Type": "text/plain"},
+    )
 
     with pytest.raises(httpx.HTTPStatusError):
         await divar.register_event_subscription("seller_access_token")
@@ -72,10 +76,14 @@ async def test_register_event_subscription_failure_logs_and_reraises(
     record = next(
         record
         for record in caplog.records
-        if record.message == "register_event_subscription failed"
+        if record.message.startswith("register_event_subscription failed")
     )
-    assert record.status_code == 500
-    assert record.response_body == "subscription failed"
+    assert "status=403" in record.message
+    assert "content_type=text/plain" in record.message
+    assert "event_type=NEW_MESSAGE_ON_POST" in record.message
+    assert f"url={SUBSCRIPTION_URL}" in record.message
+    assert "body='subscription denied'" in record.message
+    assert "seller_access_token" not in record.message
 
 
 # ---------------------------------------------------------------------------

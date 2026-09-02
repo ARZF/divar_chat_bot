@@ -297,11 +297,13 @@ async def register_event_subscription(access_token: str) -> bool:
         response.raise_for_status()
     except httpx.HTTPStatusError:
         logger.error(
-            "register_event_subscription failed",
-            extra={
-                "status_code": response.status_code,
-                "response_body": response.text,
-            },
+            "register_event_subscription failed: "
+            "status=%s content_type=%s event_type=%s url=%s body=%r",
+            response.status_code,
+            response.headers.get("content-type"),
+            payload["event_type"],
+            str(response.request.url),
+            response.text[:1000],
         )
         raise
 
