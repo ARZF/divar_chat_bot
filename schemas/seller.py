@@ -138,3 +138,74 @@ class ProductImportResponse(BaseModel):
 
     status: str
     rows_loaded: int
+
+
+# ---------------------------------------------------------------------------
+# Post-conversations (step 24) — supplier-side Divar conversations (the
+# seller dashboard's conversation source), read-only
+# ---------------------------------------------------------------------------
+
+
+class SupplierConversationItem(BaseModel):
+    """One supplier-side Divar conversation (POST system,
+    `post_conversations` table).
+
+    `conversation_id` is the Divar-assigned conversation ID (globally unique)
+    — the path identifier on the detail/messages routes; the internal
+    database `id` is never exposed. `post_token` is NOT NULL here (the POST
+    system always resolves a listing). `current_state` is NEW or ACTIVE.
+    """
+
+    conversation_id: str
+    post_token: str
+    listing_title: str | None
+    current_state: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class SupplierConversationLastMessage(BaseModel):
+    """Preview of the most recent supplier-side message (list rows only)."""
+
+    sender_type: str
+    text_content: str | None
+    sent_at: datetime
+
+
+class SupplierConversationListItem(SupplierConversationItem):
+    """Supplier conversation list row — item fields plus a bounded preview
+    of the latest stored message, when one exists."""
+
+    last_message: SupplierConversationLastMessage | None
+
+
+class SupplierConversationListResponse(BaseModel):
+    """Paginated POST-system conversation list with paging metadata."""
+
+    items: list[SupplierConversationListItem]
+    page: int
+    page_size: int
+    total: int
+    page_count: int
+
+
+class SupplierMessageItem(BaseModel):
+    """One supplier-side message (POST system, `post_messages` table).
+
+    Only safe fields are exposed: sender type (buyer/bot), text, and
+    timestamp.
+    """
+
+    sender_type: str
+    text_content: str | None
+    sent_at: datetime
+
+
+class SupplierMessageListResponse(BaseModel):
+    """Paginated, chronological POST-system message history."""
+
+    items: list[SupplierMessageItem]
+    page: int
+    page_size: int
+    total: int
+    page_count: int

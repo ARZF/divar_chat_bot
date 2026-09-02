@@ -22,7 +22,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +32,7 @@ from models.client import Client
 from models.conversation import Conversation
 from models.post import Post
 from models.post_conversation import PostConversation
+from models.post_message import PostMessage
 from models.product import Product
 from schemas.seller import (
     DashboardSummaryResponse,
@@ -45,6 +46,12 @@ from schemas.seller import (
     ProductListItem,
     ProductListResponse,
     ProductUpdateRequest,
+    SupplierConversationItem,
+    SupplierConversationLastMessage,
+    SupplierConversationListItem,
+    SupplierConversationListResponse,
+    SupplierMessageItem,
+    SupplierMessageListResponse,
 )
 from services.divar_listings import sync_listings
 from services.price_lookup import load_prices_to_db, normalize_text, refresh_lookup_cache
@@ -489,3 +496,211 @@ async def import_products(
         ) from e
 
     return ProductImportResponse(status="ok", rows_loaded=rows_loaded)
+
+
+# ---------------------------------------------------------------------------
+# Post-conversations (step 24) — supplier-side Divar conversations, read-only
+# ---------------------------------------------------------------------------
+
+# A LEFT JOIN condition from PostConversation to its OWNER's posts row,
+# riding the JOIN predicate (not the WHERE) so a conversation whose
+# post_token is missing or foreign still returns with listing_title=None
+# while a title can never be sourced from another tenant's post (§3.14).
+def _own_listing_join(client_id: int):
+    return and_(
+        Post.post_token == PostConversation.post_token,
+        Post.client_id == client_id,
+    )
+
+
+@router.get(
+    "/api/v1/seller/post-conversations",
+    response_model=SupplierConversationListResponse,
+)
+async def list_post_conversations(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    client_id: int = Depends(get_current_client_id),
+    db: AsyncSession = Depends(get_db),
+) -> SupplierConversationListResponse:
+    """Paginated list of the seller's supplier-side Divar conversations (POST
+    system, `post_conversations` table; step 24).
+
+    Every query filters `PostConversation.client_id == client_id` first.
+    Each row carries a bounded preview of the latest stored message — one
+    extra query, one message per conversation via MAX(id), never the full
+    history. Read-only.
+    """
+    conditions = [PostConversation.client_id == client_id]
+
+    total = (
+        await db.execute(
+            select(func.count()).select_from(PostConversation).where(*conditions)
+        )
+    ).scalar_one()
+
+    rows = (
+        await db.execute(
+            select(PostConversation, Post.title)
+            .outerjoin(Post, _own_listing_join(client_id))
+            .where(*conditions)
+            .order_by(PostConversation.updated_at.desc(), PostConversation.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+
+    # Latest stored message per conversation in this page (bounded: at most
+    # one PostMessage row per conversation, never the whole history).
+    latest: dict[int, PostMessage] = {}
+    if rows:
+        max_ids = (
+            select(
+                PostMessage.post_conversation_id,
+                func.max(PostMessage.id).label("max_id"),
+            )
+            .where(
+                PostMessage.post_conversation_id.in_(
+                    [conv.id for conv, _ in rows]
+                )
+            )
+            .group_by(PostMessage.post_conversation_id)
+        ).subquery()
+        latest_rows = (
+            await db.execute(
+                select(PostMessage).join(max_ids, max_ids.c.max_id == PostMessage.id)
+            )
+        ).scalars().all()
+        latest = {pm.post_conversation_id: pm for pm in latest_rows}
+
+    items = []
+    for conv, title in rows:
+        pm = latest.get(conv.id)
+        items.append(
+            SupplierConversationListItem(
+                conversation_id=conv.divar_conversation_id,
+                post_token=conv.post_token,
+                listing_title=title,
+                current_state=conv.current_state.value,
+                created_at=conv.created_at,
+                updated_at=conv.updated_at,
+                last_message=(
+                    SupplierConversationLastMessage(
+                        sender_type=pm.sender_type.value,
+                        text_content=pm.text_content,
+                        sent_at=pm.created_at,
+                    )
+                    if pm is not None
+                    else None
+                ),
+            )
+        )
+
+    return SupplierConversationListResponse(
+        items=items,
+        page=page,
+        page_size=page_size,
+        total=total,
+        page_count=(total + page_size - 1) // page_size,
+    )
+
+
+@router.get(
+    "/api/v1/seller/post-conversations/{conversation_id}",
+    response_model=SupplierConversationItem,
+)
+async def get_post_conversation(
+    conversation_id: str,
+    client_id: int = Depends(get_current_client_id),
+    db: AsyncSession = Depends(get_db),
+) -> SupplierConversationItem:
+    """Single supplier-side Divar conversation (POST system, step 24).
+
+    Lookup is always `divar_conversation_id AND client_id` — cross-tenant
+    and nonexistent are the same non-leaking 404 (§3.14).
+    """
+    row = (
+        await db.execute(
+            select(PostConversation, Post.title)
+            .outerjoin(Post, _own_listing_join(client_id))
+            .where(
+                PostConversation.client_id == client_id,
+                PostConversation.divar_conversation_id == conversation_id,
+            )
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    conv, title = row
+    return SupplierConversationItem(
+        conversation_id=conv.divar_conversation_id,
+        post_token=conv.post_token,
+        listing_title=title,
+        current_state=conv.current_state.value,
+        created_at=conv.created_at,
+        updated_at=conv.updated_at,
+    )
+
+
+@router.get(
+    "/api/v1/seller/post-conversations/{conversation_id}/messages",
+    response_model=SupplierMessageListResponse,
+)
+async def list_post_conversation_messages(
+    conversation_id: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    client_id: int = Depends(get_current_client_id),
+    db: AsyncSession = Depends(get_db),
+) -> SupplierMessageListResponse:
+    """Paginated, chronological history for ONE supplier-side conversation
+    (POST system, step 24).
+
+    The parent is resolved through `post_conversations` with
+    `client_id AND divar_conversation_id`, so a cross-tenant conversation is
+    the same non-leaking 404 (§3.14) — its messages are never reachable.
+    Ordering: `created_at ASC, id ASC`.
+    """
+    parent = (
+        await db.execute(
+            select(PostConversation.id).where(
+                PostConversation.client_id == client_id,
+                PostConversation.divar_conversation_id == conversation_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    conditions = [PostMessage.post_conversation_id == parent]
+    total = (
+        await db.execute(
+            select(func.count()).select_from(PostMessage).where(*conditions)
+        )
+    ).scalar_one()
+
+    rows = (
+        await db.execute(
+            select(PostMessage)
+            .where(*conditions)
+            .order_by(PostMessage.created_at.asc(), PostMessage.id.asc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).scalars().all()
+
+    return SupplierMessageListResponse(
+        items=[
+            SupplierMessageItem(
+                sender_type=row.sender_type.value,
+                text_content=row.text_content,
+                sent_at=row.created_at,
+            )
+            for row in rows
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+        page_count=(total + page_size - 1) // page_size,
+    )
