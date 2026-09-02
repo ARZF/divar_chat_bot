@@ -4,6 +4,152 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-09-02 (step 26: Free Trial model, quota semantics, payment boundary;
+  decision gate — no code; revised same day: buyer quota is counted per
+  seller post-conversation, buyer identity is intentionally irrelevant, and
+  a per-conversation buyer-message cap is defined as abuse protection)** —
+  The package/subscription milestone's business decisions are recorded
+  before any implementation.
+
+  - **Free Trial (per seller/client):** 7 days, **50 buyer conversations**,
+    500 buyer-generated messages; **one trial per client**; the trial ends
+    when the **first** of the three limits is reached. Limits are
+    **seller-scoped but count buyer-generated usage** — a seller's own
+    messages are never quota-limited (no "N seller messages" quota exists or
+    will exist), and the message quota is independent of the conversation
+    quota. Usage dimensions: trial duration, buyer conversations, buyer
+    messages.
+  - **What counts as a buyer message:** one inbound **BUYER-side** message
+    processed by the chatbot = one usage unit. Chatbot replies
+    (`PostMessage.sender_type = BOT`) and seller messages do not count — the
+    webhook already drops `NEW_MESSAGE` events whose `sender.side != "BUYER"`
+    (api/webhook.py). Two ingestion paths exist, with very different counting
+    readiness (below).
+  - **Buyer conversation semantics (the counting unit):** buyer conversation
+    usage is counted **per seller post-conversation**. The same buyer
+    interacting with multiple posts of the same seller consumes **one
+    buyer-conversation unit per post conversation** (Buyer A → Post A, Post
+    B, Post C = 3 units) — intentional, by product decision. Cross-post
+    buyer identity is **intentionally irrelevant**: no global buyer identity,
+    buyer phone number, buyer account ID, cross-post deduplication,
+    `COUNT(DISTINCT buyer)`, or new buyer-identity model is needed or
+    wanted. The natural accounting unit is the existing seller-scoped
+    `post_conversations` row. (Factually, the Divar webhook `ChatMessage`
+    payload — docs/events/chat.md — carries only `sender.side`
+    (`BUYER`/`SELLER`) and `sender.type` (`HUMAN`/`BOT`) and no buyer
+    identifier; under these semantics that is a **non-issue, not a gap**.)
+  - **Per-conversation message cap (abuse protection — not a package
+    quota):** **maximum 50 inbound BUYER messages per seller
+    post-conversation.** This exists so one buyer cannot consume the
+    seller's entire message quota by continuously messaging the same post;
+    it is a protection rule, deliberately **not** a fourth package quota.
+    The full constraint set is the three seller-level trial limits
+    (7 days / 50 buyer conversations / 500 buyer messages, first reached
+    ends the trial) **plus** this independent per-conversation cap. Rules:
+    - each inbound BUYER message counts toward both the seller's global
+      buyer-message quota and its own conversation's cap, **up to the cap**;
+    - once a `post_conversation` reaches 50 buyer messages, further buyer
+      messages in that conversation are **not processed by the chatbot**,
+      create **no** new conversation unit, and consume **no** remaining
+      global buyer-message unit;
+    - bot replies and seller messages never count toward either level;
+    - the same buyer contacting another post of the same seller opens a new
+      `post_conversation` with its own fresh 50-message cap (buyer identity
+      across posts remains irrelevant).
+    Example: with 50 conversations / 500 messages, Buyer A sending 50
+    messages in Post A caps that conversation; the 51st is blocked and
+    consumes nothing; Buyer A can still open the Post B conversation with
+    its own cap — so no single buyer can exhaust the seller's 500-message
+    allowance through one post.
+  - **Counting readiness per ingestion path** (quota is defined over the POST
+    system — `post_conversations`/`post_messages` — the accounting surface
+    for this decision):
+    - **POST system** (`NEW_MESSAGE` → `services/post_conversation.py::
+      handle_post_bot_reply`): both quotas derive from existing
+      seller-scoped rows (§3.11's derive-from-existing-records preference) —
+      buyer conversations ≡ `COUNT(post_conversations WHERE client_id = …)`
+      and buyer messages ≡ `COUNT(post_messages WHERE sender_type='buyer'`
+      on that client's conversations) — and the ingestion path already has
+      the atomic, idempotent seams a counter increment would need: the buyer
+      `PostMessage` insert is `ON CONFLICT (divar_message_id) DO NOTHING` +
+      `rowcount != 1 → rollback/return`, and the conversation upsert is
+      `ON CONFLICT (divar_conversation_id) DO NOTHING`, so a redelivered
+      webhook can never double-count a unit. The per-conversation cap
+      derives the same way: `COUNT(post_messages WHERE
+      post_conversation_id = … AND sender_type='buyer')`. The enforcement
+      gate — seller-level quotas **and** the per-conversation cap — must run
+      **before** reply generation/send, so a blocked message is neither
+      processed nor counted.
+    - **BOT system** (`NEW_CHATBOT_MESSAGE` →
+      `services/chatbot_conversation.py::handle_bot_reply`): **outside the
+      quota unit definition** of this decision — its buyer messages are
+      never persisted (no production writer writes `messages` rows), the
+      webhook dispatch does not pass `divar_message_id` into the
+      orchestrator, and this branch does not filter `sender.side`. Only if
+      the product ever extends quota to this path would it need new
+      persistence + message-id capture + a BUYER-side filter; nothing in
+      the trial model requires that work.
+  - **Payment boundary:** checkout/payment remains **intentionally
+    unavailable** — no gateway, no checkout/callback/verification, no success
+    pages, no invented prices/durations/limits. Verified: the repository
+    contains **no authoritative package source** (no plans table/config; the
+    public pricing page renders an honest "nothing to show" state; the
+    dashboard summary carries no plan fields), so the **paid package
+    catalogue is deferred** and must be defined before paid subscription
+    implementation begins. Future paid packages will need at minimum:
+    identifier, name, price, currency, duration, buyer-conversation limit,
+    buyer-message limit, activation/start semantics, expiration semantics.
+  - **Architecture impact map (future steps 27–29, not implemented):**
+
+    | Area | Current location | Future change needed | Step |
+    |---|---|---|---|
+    | Seller scope | `models/client.py` (no trial fields), `api/auth.py::get_current_client_id` | trial/subscription lookup keyed by JWT-derived `client_id`; new trial persistence (clients has no fields for it) | 28 |
+    | POST ingestion | `api/webhook.py` NEW_MESSAGE branch; `services/post_conversation.py::handle_post_bot_reply` | enforcement gate after the posts→client_id resolution and before reply generation/send, covering both the seller-level quotas and the per-conversation 50-message cap; increment coupled to the dedup insert's transaction | 28 |
+    | BOT ingestion | `api/webhook.py` NEW_CHATBOT_MESSAGE branch; `services/chatbot_conversation.py::handle_bot_reply` | none required by this decision (quota is defined over the POST system); only if quota is later extended to this path: pass `divar_message_id`, filter `sender.side == "BUYER"`, persist buyer messages | — |
+    | Conversation models | `models/conversation.py`, `models/post_conversation.py` | no change required: the seller-scoped `post_conversations`/`post_messages` rows **are** the quota unit — `client_id` FK + global-unique Divar IDs give both scoping and idempotency; **no buyer-identity model is needed** | — |
+    | Database | no plans/subscriptions/trials tables; `post_messages.divar_message_id` globally unique | new trial/subscription tables + Alembic migration; optionally a usage-event table keyed on `divar_message_id` (idempotent across both systems) if derived counts prove insufficient | 28 |
+    | Service layer | `services/` (engine + two orchestrators + oauth_refresh) | new `services/usage.py`-style module: trial eligibility/state, buyer-conversation count, message count at both levels (seller-level quota + per-conversation cap), enforcement — called from both orchestrators after `client_id` resolution | 28 |
+    | Dashboard | `api/seller.py::dashboard_summary` (honest "هنوز در دسترس نیست" placeholder), `static/js/dashboard.js`, `/dashboard/subscription` route does not exist, public `/pricing` empty state | trial status/days remaining/buyer-conversation & message usage/current package/subscription status displays | 29 |
+
+  - **Bottlenecks / race conditions identified (deliberately not fixed):**
+    1. **Check-then-act race (applies at both levels):** two concurrent
+       buyer messages at 499/500 both pass a naive seller-level limit check
+       → 501; the same race at the per-conversation cap — two concurrent
+       messages at 49/50 in one `post_conversation` → 51 processed. Both
+       the seller-level quotas and the per-conversation cap must be enforced
+       atomically in one statement (conditional `UPDATE ... WHERE
+       used < limit`, or count-on-insert guarded by the unique key) — never
+       read-check-write.
+    2. **Concurrent-conversation counting:** two concurrent first messages on
+       two different posts each insert a conversation and each legitimately
+       counts one unit (correct under per-post-conversation semantics); the
+       conversation upsert's `ON CONFLICT DO NOTHING` on the global-unique
+       `divar_conversation_id` already makes the unit immune to redelivery
+       double-counting, and a derived `COUNT(post_conversations WHERE
+       client_id = …)` has no counter race at all.
+    3. **Pool exhaustion on the hot path (pre-existing, CHECKLISTS):**
+       `handle_post_bot_reply` holds its session across the Divar send incl.
+       retries (~27–68s worst case); engine uses SQLAlchemy's default pool
+       (5 + 10 overflow). Quota checks add per-message DB work exactly there.
+    4. **BOT-path redelivery:** no message-id dedup exists → double replies;
+       irrelevant to quota while quota stays POST-system-only (see the BOT
+       system boundary above).
+    5. **Future LLM cost:** no LLM today (keyword engine; `services/ai.py` is
+       Phase 4). When it lands, the quota gate must run **before** the LLM
+       call so over-quota messages never incur model cost.
+    6. **Send-failure usage semantics:** the POST path commits buyer insert +
+       bot reply + state together and rolls back all of it when the Divar send
+       fails — the buyer's message record is currently lost on send failure.
+       The future step must decide whether a buyer message counts on receipt
+       or on successful processing, and keep the counter consistent with that.
+  - **Tenant isolation of the quota model:** usage is attributed exclusively
+    by server-side ownership — webhook paths resolve `client_id` from
+    `posts.post_token` (trusted DB lookup), API paths from
+    `get_current_client_id` (JWT). A browser-supplied `client_id` is never
+    trusted (§3.13), cross-tenant resources stay a non-leaking 404 (§3.14),
+    and one seller can never consume another's quota because conversation
+    rows and the global-unique message IDs already pin usage to one client.
+
 - **2026-08-30 (step 21: listing read/sync/availability APIs; presence split
   from availability)** — The three seller listing endpoints land, and the
   `is_available` conflation is resolved.

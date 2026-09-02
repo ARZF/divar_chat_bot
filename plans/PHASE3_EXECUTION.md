@@ -521,6 +521,39 @@ payment boundary. **Stop:** if absent; subscription implementation is deferred,
 while earlier completed slices remain deployable. **Commit:**
 `docs(plans): record subscription implementation decision`.
 
+**As decided (2026-09-02, revised same day — buyer quota is per
+post-conversation, plus a per-conversation message cap):** Free Trial =
+**7 days / 50 buyer conversations / 500 buyer-generated messages, one trial
+per client, first limit reached ends it**. The quota counts
+**buyer-generated usage only** — a seller's own messages are never
+quota-limited, and the message quota is independent of the conversation
+quota. A **buyer conversation** is scoped to a seller's post: the unit is
+the existing seller-scoped `post_conversations` row, so the same buyer
+contacting several of one seller's posts consumes **one unit per post
+conversation** (intentional). Cross-post buyer identity is intentionally
+irrelevant — no buyer-identity model, cross-post dedup, or
+`COUNT(DISTINCT buyer)` is needed; that Divar's webhook payload carries no
+buyer identity is a non-issue under these semantics, not a gap. One inbound
+BUYER-side message = one message unit; bot replies and seller messages
+never count. Independently of the three seller-level limits, each
+`post_conversation` has its own **50 inbound BUYER-message cap (abuse
+protection — not a package quota)**: once a conversation reaches 50 buyer
+messages, further buyer messages in it are not processed by the chatbot,
+open no new conversation unit, and consume no remaining global
+buyer-message unit; each post conversation gets its own fresh cap, so one
+buyer cannot exhaust the seller's 500-message allowance through a single
+post. Both levels — seller-level quotas and the per-conversation cap —
+must be enforced atomically (never read-check-write; see the CHANGELOG
+race analysis). Checkout/payment stays intentionally unavailable and the
+paid catalogue is deferred — no authoritative package source exists in the
+repo. Both quotas derive from existing seller-scoped rows, with the
+atomic/idempotent seams already in place (`post_conversations.
+divar_conversation_id` and `post_messages.divar_message_id` globally unique
++ `ON CONFLICT DO NOTHING`); quota is defined over the POST system — the
+BOT path persists no buyer messages today. Architecture impact map and
+race-condition analysis: **CHANGELOG.md 2026-09-02** (steps 27–29 consume
+it).
+
 ### 27. Define usage contract — **research/decision gate; no coding**
 
 **Depends on:** 26. **Read:** §3.11.
