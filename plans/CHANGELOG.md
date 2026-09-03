@@ -4,6 +4,152 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-09-03 (step 27: initial subscription usage contract; research/
+  decision gate — no code)** — Defines how every step-26 metric is measured,
+  per §3.11's derive-from-existing-records preference: **all usage is
+  derived from existing rows; no counters, no usage-event table, no new
+  infrastructure.** Verified against the live code before deciding
+  (`models/post.py`, `models/post_conversation.py`, `models/post_message.py`,
+  `models/product.py`, `models/client.py`, `services/post_conversation.py`,
+  `api/webhook.py`, `api/seller.py`, alembic baseline `0001`): the only
+  production writer of `post_messages` is
+  `services/post_conversation.py::handle_post_bot_reply`, and no
+  subscription/trial/quota code exists yet (every "subscription" match in
+  the codebase is Divar webhook *event*-subscription registration). Steps
+  28–29 implement against this contract.
+
+  - **Buyer conversations (source of truth).** One usage unit = one
+    committed `post_conversations` row; query shape:
+    `COUNT(post_conversations WHERE client_id = :client AND created_at ∈ entitlement window)`.
+    Verified seams: `divar_conversation_id` is globally unique
+    (`uq_post_conversations_divar_conversation_id`) and creation is
+    `ON CONFLICT DO NOTHING`
+    (`services/post_conversation.py::_resolve_post_conversation`), so
+    webhook redelivery can never create a second unit, and a concurrent
+    duplicate insert serializes on the unique index (the waiter gets
+    rowcount 0). An ownership mismatch (conversation id already owned by
+    another client) is refused and rolled back, so cross-tenant usage can
+    never be attributed. **A lifetime `COUNT(post_conversations WHERE
+    client_id = …)` is NOT the trial number** — step 26 never authorized
+    lifetime counting: the `created_at ≥ period_start` filter is mandatory,
+    and conversations created before the entitlement window do not count.
+    `current_state` is a chatbot state-machine value, not a usage status —
+    every row in the window counts regardless of state; no
+    excluded/closed-conversation semantics exist or are needed.
+  - **Buyer messages (source of truth).** One usage unit = one committed
+    `post_messages` row with `sender_type = 'buyer'` (enum values are
+    lowercase `'buyer'`/`'bot'` — `PostSenderType`; no SELLER value exists,
+    so seller messages structurally cannot enter the table). Query shape:
+    `COUNT(post_messages m JOIN post_conversations c ON m.post_conversation_id = c.id WHERE c.client_id = :client AND m.sender_type = 'buyer' AND m.created_at ∈ entitlement window)`.
+    Verified: the webhook drops `NEW_MESSAGE` events with
+    `sender.side != "BUYER"` or empty text (`api/webhook.py`), so only
+    non-empty buyer-side text messages ever reach persistence; the buyer
+    insert is `ON CONFLICT (divar_message_id) DO NOTHING` with
+    `rowcount != 1 → rollback/return`, so redelivery and an
+    original-vs-retry race can never double-count (the second insert blocks
+    on the unique index until the first commits, then no-ops).
+    `divar_message_id` is nullable — bot replies are inserted with NULL —
+    so the unique constraint dedups exactly the buyer rows; that is the
+    idempotency seam, unchanged.
+  - **Send-failure boundary (decided): a buyer message counts toward usage
+    only when its `post_messages` row is successfully committed — not on
+    receipt.** Current
+    transaction semantics: buyer insert + bot reply + state transition
+    commit together, and every failure path after the insert (OAuth token
+    missing, refresh failed, Divar send failed) rolls the whole thing back —
+    a send-failed buyer message is neither persisted nor counted, while a
+    message that needs no reply (`reply is None`) commits and counts. This
+    is the safest and most consistent definition because (a) it needs zero
+    transaction changes — the derived count is exact today; (b) it makes
+    step 26's "blocked messages consume nothing" automatic: a quota-blocked
+    message is simply never inserted, hence never counted; (c) its error
+    direction is undercount — a seller can never be overcharged by a
+    delivery failure. Counting on receipt would require persisting before
+    the send and changing the (pre-existing, quota-unrelated) send-failure
+    data-loss behavior — out of scope. Known consequence, accepted: the
+    webhook returns 200 before background processing, so a send-failed
+    message is not retried by Divar and is currently lost entirely —
+    pre-existing behavior this contract deliberately does not change.
+  - **Per-conversation abuse cap (50 inbound BUYER messages) — derived, not
+    counted.** `COUNT(post_messages WHERE post_conversation_id = :conv AND
+    sender_type = 'buyer') < 50` is the admission test; each new
+    `post_conversation` gets its own fresh cap for free (its own rows). Not
+    a package quota: messages 1–50 also consume the seller-level quota when
+    within the entitlement window; message 51+ must be blocked in step 28
+    **before** reply generation/send — and under the committed-rows contract
+    "blocked ⇒ not inserted ⇒ consumes nothing (neither level)" falls out
+    automatically. No persistent per-conversation counter: derived counting
+    is sufficient.
+  - **Active listings — reportable metric, not a trial quota.** Metric =
+    `COUNT(posts WHERE client_id = :client AND present_on_divar)`.
+    `present_on_divar` (written only by `services/divar_listings.py` sync)
+    is the sole Divar-listing-lifecycle field; `is_available` is the
+    seller's chatbot on/off toggle and `chat_enabled` is Divar-side
+    metadata — neither may be reinterpreted as listing status (see the
+    `models/post.py` docstring). Step 26 set no listing limit, so this is
+    defined for reporting/readiness only; §3.10.1's `listing_limit` is a
+    future paid-plan field.
+  - **Products — reportable metric, not a trial quota.** Metric =
+    `COUNT(products WHERE client_id = :client)`; ownership is the
+    `client_id` FK (indexed) with `(client_id, normalized_name)` uniqueness.
+    No soft-delete/inactive semantics exist (no such columns; seller
+    mutations hard-DELETE), so every row counts. Step 26 set no product
+    limit; §3.10.1's `product_limit` is a future paid-plan field.
+  - **Entitlement window / reset / timezone (the reusable principle).**
+    - Trial start: a UTC `trial_started_at` stamped when the trial is
+      granted (step 28 persistence — `clients` has no such field today,
+      verified).
+    - Trial end: **a precise UTC instant** `trial_started_at + 7 × 24 h` —
+      not a seller-local calendar day; a calendar-day rule would require a
+      per-seller timezone that exists nowhere in the schema.
+    - **UTC is authoritative**; every usage timestamp column is
+      `DateTime(timezone=True)` defaulting to `datetime.now(timezone.utc)`
+      — the repository convention the contract adopts unchanged.
+    - **Half-open interval** `[trial_started_at, trial_end)`: a row counts
+      iff `created_at >= period_start AND created_at < period_end`. This
+      removes both the boundary ambiguity (a row exactly at a boundary
+      belongs to exactly one period — never two, never zero) and the
+      timezone question (elapsed-time windows have no local-day ambiguity).
+    - **No reset exists or is needed.** The trial is one-time and never
+      resets; after it ends no new usage is granted, and later rows simply
+      fall outside every window. Future paid packages reuse the same shape:
+      any entitlement is a half-open UTC `[period_start, period_end)` pair
+      and usage is always the window-scoped derived count — a period
+      boundary "resets" usage *by definition of the window*, with no
+      counter reset, snapshot, or purge operation. Package durations remain
+      undecided (paid catalogue deferred per step 26).
+  - **Reporting vs enforcement (concurrency findings).** Derived counts are
+    the single source of truth for **reporting/reconciliation** (dashboard,
+    subscription view, step 29 — `dashboard_summary` already derives counts
+    this way). They are **not sufficient for admission control** under
+    concurrency: a naive count-then-insert check races at both levels (two
+    concurrent buyer messages at 499/500 → 501; two at the 49/50
+    per-conversation cap → 51; two concurrent first conversations at 49/50
+    → 51). Step 28 must serialize count-check + dedup-insert in one
+    transaction — candidate mechanism family (choice deferred to step 28):
+    a per-client transaction-scoped PostgreSQL advisory lock (plus
+    per-conversation for the cap), or an equivalent conditional single
+    statement — never read-check-write. Redelivery / original-vs-retry
+    races need nothing new: both unique constraints already resolve them
+    idempotently (verified). Note the pre-existing hot-path session-holding
+    across the Divar send (step 26 bottleneck 3) — the quota gate must run
+    before reply generation/send, not add a second long-held session.
+  - **Explicitly deferred.** (a) Persistent counters / usage-event table:
+    not needed — derived rows satisfy correctness; triggers that would
+    revisit: EXPLAIN-proved degradation of the window-scoped COUNTs at
+    production volume, or a future entitlement requiring O(1) admission
+    without serialization. (b) Indexes: none added; candidates when volume
+    justifies them are `(client_id, created_at)` on `post_conversations`
+    and a sender-aware composite on `post_messages` — the existing
+    `ix_post_conversations_client_id`,
+    `ix_post_messages_post_conversation_id`, and the two unique indexes
+    already cover today's shapes. (c) The webhook filters `sender.side`
+    only, not `sender.type` — a BUYER-side BOT-typed sender would be
+    processed and counted; recorded as a known nuance for step 28 to
+    confirm or tighten. (d) Send-failure message loss (above) —
+    pre-existing, unrelated to quota, unchanged. (e) Paid catalogue fields
+    incl. durations/limits — the step 26 payment boundary stands.
+
 - **2026-09-02 (step 26: Free Trial model, quota semantics, payment boundary;
   decision gate — no code; revised same day: buyer quota is counted per
   seller post-conversation, buyer identity is intentionally irrelevant, and

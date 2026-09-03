@@ -566,6 +566,29 @@ only if persistent counters are genuinely required. Prefer derived counts.
 proposed without need. **Stop:** persistent counter requirements unresolved.
 **Commit:** `docs(plans): define initial subscription usage contract`.
 
+**As decided (2026-09-03):** all five usage dimensions derive from existing
+rows — buyer conversations from `post_conversations`, buyer messages from
+`post_messages` (`sender_type = 'buyer'`; no SELLER value exists in the
+enum), the per-conversation 50-message abuse cap from the same rows scoped
+to one conversation, active listings from `posts.present_on_divar`
+(`is_available`/`chat_enabled` are not listing status), products from
+`products` — no counters, no usage-event table, no new infrastructure.
+Every entitlement is a **half-open UTC interval `[period_start,
+period_end)`** (trial end = trial start + 7 × 24 h, precise instant, no
+local-calendar-day rule; UTC per the repository's `timezone=True`
+convention) and usage is always the **window-scoped derived count** —
+lifetime `COUNT`s are explicitly rejected for entitlement, and period
+boundaries "reset" usage by definition of the window, with no reset
+operation. A buyer message **counts toward usage only when its `post_messages` row is
+successfully committed**: send failures roll the row back and quota-blocked
+messages are never inserted, so both automatically consume nothing. Derived counts
+are the source of truth for reporting; concurrent admission in step 28
+needs transactional serialization (advisory-lock or conditional-statement
+family — never read-check-write), while redelivery idempotency is already
+guaranteed by the two existing unique constraints. Full contract with
+query shapes, verification evidence, concurrency analysis, and deferred
+items: **CHANGELOG.md 2026-09-03**.
+
 ### 28. Add plans/subscriptions model and read APIs
 
 **Depends on:** 26–27. **Scope:** create only the models/fields in §3.10,
