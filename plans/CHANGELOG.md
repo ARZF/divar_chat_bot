@@ -4,6 +4,78 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-09-04 (step 28: plans/subscriptions model + read APIs; central
+  subscription service with lazy default Free Trial)** — §3.10's read model
+  lands, restructured mid-implementation by maintainer architecture
+  correction: **no subscription/plan business logic in `main.py`** (the
+  initial startup-seed design was removed before commit), and a dedicated
+  central service owns everything.
+
+  - **Architecture (maintainer-approved 2026-09-04):** Plan (shared
+    catalogue) and Subscription (one row per client) are fully separate.
+    `services/subscriptions.py` is the single owner of "does this seller
+    have a subscription, and what is it?": `ensure_default_subscription`
+    returns an existing row of ANY status untouched (an expired trial is
+    never re-issued — one trial per client, step 26) or creates exactly
+    one default Free Trial, LAZY + idempotent — no startup seeding, no
+    eager creation at client signup (`find_or_create_client` untouched in
+    both OTP and OAuth flows), no bulk backfill of existing clients.
+    Concurrent first-calls serialize on `uq_subscriptions_client_id`; the
+    loser's IntegrityError re-reads the winner's row. Later steps (29+)
+    call the service instead of re-implementing entitlement checks.
+  - **Free Trial Plan catalogue row:** created idempotently from the
+    central config on first need (`get_or_create_free_trial_plan`) —
+    config.py's `FREE_TRIAL_*` constants are the ONLY source of 7 days /
+    50 buyer conversations / 500 buyer messages; a pre-existing row under
+    the trial name is never rewritten. Before any seller needs it, the
+    public plans list is honestly empty (the pricing page already renders
+    its "nothing to show" state, step 26). The paid catalogue remains
+    deferred — nothing else is seeded or invented.
+  - **Models:** `plans` = §3.10.1's fields plus `conversation_limit` and
+    `duration_days` (not in §3.10.1's *suggested* list, but required to
+    carry the approved trial semantics in-row; flagged to maintainer,
+    accepted) — `uq_plans_name`, NULL limit = no limit of that kind,
+    price Integer-rials like products.price, no currency field (paid
+    catalogue deferred). `subscriptions` = §3.10.2's fields exactly +
+    `uq_subscriptions_client_id` (one row per client = the *current*
+    subscription); statuses only §3.10.3's ACTIVE/EXPIRED/CANCELLED/
+    PENDING (uppercase values, repo enum convention); `started_at`/
+    `expires_at` nullable (PENDING has not started — no sentinel dates);
+    plan FK without ON DELETE (dropping a plan must not silently delete
+    sellers' subscriptions). The per-conversation 50-BUYER-message rule
+    is deliberately NOT a plan field — abuse protection, not a package
+    quota (step 26).
+  - **Read-time expiration:** `effective_subscription_status` — stored
+    ACTIVE + `now >= expires_at` (step 27's half-open window, UTC, with
+    the naive-SQLite tzinfo guard) → presented EXPIRED; every other
+    stored status passes through; never a GET-time write-back.
+  - **APIs:** `GET /api/v1/plans` (public, no auth — active plans only,
+    ordered by id; exact field contract, no internal ids/`is_active`/
+    timestamps; read-only — 405 on mutations). `GET
+    /api/v1/seller/subscription` (JWT-only `get_current_client_id`;
+    browser-supplied client_id never read; routes through
+    `ensure_default_subscription` — a never-subscribed seller gets their
+    trial created+persisted on first read, 200 not 404; an existing row
+    is returned untouched; the relationship is loaded explicitly to avoid
+    async lazy-load errors). No checkout, no trial *re*-activation, no
+    quota enforcement, no usage counters/events (Step 27's derived-usage
+    contract stands).
+  - **Migration policy honored:** schema folded into the squashed baseline
+    `alembic/versions/0001_initial_schema.py` (plans + subscriptions +
+    `subscription_status_enum`, downgrade extended) — NO new migration
+    file, no autogenerate, no destructive changes; the header's
+    "additive-only once deployed" rule is unaffected (pre-production).
+  - **Tests:** `tests/test_subscriptions.py` — model relationships/
+    defaults/uniqueness, catalogue on-demand creation + no-rewrite, lazy
+    idempotent assignment (exactly one row per client, existing rows of
+    any status reused untouched, two sellers → two independent
+    subscriptions referencing one plan), read-time expiry rules incl.
+    half-open boundary and no-mutation, public plans API (active-only,
+    field contract, honest empty, trial appears after first need,
+    read-only), subscription API (JWT gate, lazy default on first read +
+    persistence, elapsed-ACTIVE → EXPIRED, stored statuses pass through,
+    tenant isolation incl. query/body client_id attempts).
+
 - **2026-09-03 (step 27: initial subscription usage contract; research/
   decision gate — no code)** — Defines how every step-26 metric is measured,
   per §3.11's derive-from-existing-records preference: **all usage is

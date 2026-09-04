@@ -601,6 +601,34 @@ applicable; expired status is correct; A cannot read B's subscription; migration
 preserves existing data and indexes relationships. **Commit:**
 `feat(subscriptions): add plans and seller subscription read model`.
 
+**As decided (2026-09-04, maintainer architecture correction):** a dedicated
+central service (`services/subscriptions.py`) owns all subscription logic —
+`ensure_default_subscription` returns the seller's existing row (any status —
+an expired trial is never re-issued; one trial per client) or creates
+exactly one default Free Trial subscription, LAZY and idempotent: no
+startup seeding and **no subscription/plan business logic in `main.py`**,
+no eager creation at client signup, no bulk backfill of existing clients.
+The Free Trial *Plan catalogue* row is created idempotently from the
+central config (`config.py` FREE_TRIAL_* constants — the only source of
+7 days / 50 buyer conversations / 500 buyer messages) on first need by the
+same service; before any seller needs it the public `/api/v1/plans` list
+is honestly empty (the pricing page already renders its "nothing to show"
+state for that case). Plan (shared catalogue) and Subscription (one row
+per client, `uq_subscriptions_client_id`) are fully separate; each seller
+gets an independent Subscription row referencing the one Plan row.
+`GET /api/v1/seller/subscription` routes through the service (lazy default
+assignment on first read, persisted by the endpoint's commit; existing
+rows returned untouched), `client_id` only ever from the JWT. Read-time
+effective status: stored-ACTIVE + elapsed `expires_at` (half-open
+[started_at, expires_at), UTC) → presented EXPIRED, never a GET-time
+mutation; other stored statuses pass through. Schema in the squashed
+baseline `0001` only (no new migration file, per project policy): `plans`
+(§3.10.1 fields + `conversation_limit`/`duration_days`, which the step 26
+trial semantics require; `uq_plans_name`) and `subscriptions` (§3.10.2
+fields, §3.10.3 statuses only, plan FK without ON DELETE). No checkout,
+no quota enforcement, no usage counters — Step 27's derived-usage contract
+stands.
+
 ### 29. Build pricing/subscription displays — **review gate**
 
 **Depends on:** 28. **Scope:** connect public pricing and protected subscription
