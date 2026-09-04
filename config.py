@@ -84,6 +84,17 @@ class Settings(BaseSettings):
         "منو", "خدمات", "سرویس", "اپراتور"
     ])
 
+    # --- 📦 Subscription plans (§3.10, steps 26–28) ---
+    # Single authoritative source of the approved Free Trial numbers
+    # (step 26). services/subscriptions.py creates the catalogue row and
+    # each seller's trial from these, so no other module may hard-code
+    # them. The paid catalogue is deferred (step 26 payment boundary) — no
+    # paid plan values exist or may be invented.
+    FREE_TRIAL_PLAN_NAME: str = "Free Trial"
+    FREE_TRIAL_DURATION_DAYS: int = 7              # 7 × 24 h entitlement (step 27 half-open window)
+    FREE_TRIAL_BUYER_CONVERSATION_LIMIT: int = 50  # buyer conversations per seller (NOT the per-conversation 50-message abuse cap)
+    FREE_TRIAL_BUYER_MESSAGE_LIMIT: int = 500      # inbound BUYER messages; bot/seller messages never count
+
     # Note: Pydantic handles dictionaries flawlessly, but mutable types like dicts
     # should be declared with their types clearly typed out.
     # _match_intent returns the FIRST match, so insertion order breaks ties on

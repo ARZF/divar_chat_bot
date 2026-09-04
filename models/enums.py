@@ -12,3 +12,12 @@ class ConversationState(StrEnum):
 class PostConversationState(StrEnum):
     NEW = "NEW"
     ACTIVE = "ACTIVE"
+
+
+class SubscriptionStatus(StrEnum):
+    """§3.10.3 — the only subscription statuses; no others may be invented."""
+
+    ACTIVE = "ACTIVE"
+    EXPIRED = "EXPIRED"
+    CANCELLED = "CANCELLED"
+    PENDING = "PENDING"

@@ -11,6 +11,7 @@ from api.webhook import router as webhook_router
 from api.oauth import router as oauth_router
 from api.admin import router as admin_router
 from api.auth import router as auth_router
+from api.plans import router as plans_router
 from api.seller import router as seller_router
 from api.web import STATIC_DIR, router as web_router
 
@@ -83,6 +84,7 @@ app.include_router(webhook_router)
 app.include_router(oauth_router)
 app.include_router(admin_router)
 app.include_router(auth_router)
+app.include_router(plans_router)
 app.include_router(seller_router)
 app.include_router(web_router)
 

@@ -21,6 +21,11 @@ last_synced_at — all nullable, written only by services/divar_listings.py),
 Step 23 folds `conversations.post_token` (nullable): the listing a BOT
 conversation belongs to, so buyer chatbot conversations stay resolvable to
 their `posts` row (mirrors post_conversations.post_token).
+Step 28 folds in the §3.10 subscription read model: `plans` (package
+catalogue; the only seeded-eligible row is the step 26 Free Trial, seeded
+at app startup from config — no data in this migration) and
+`subscriptions` (one row per client, uq_subscriptions_client_id), plus the
+`subscription_status_enum` (§3.10.3: ACTIVE/EXPIRED/CANCELLED/PENDING).
 
 The history was collapsed because NO migration in the old chain has ever run
 against a real production database: the project is pre-production and the
@@ -385,8 +390,82 @@ def upgrade() -> None:
         ["post_conversation_id"],
     )
 
+    # --- plans / subscriptions (step 28, §3.10) ---
+    subscription_status_enum = postgresql.ENUM(
+        "ACTIVE",
+        "EXPIRED",
+        "CANCELLED",
+        "PENDING",
+        name="subscription_status_enum",
+        create_type=False,
+    )
+    subscription_status_enum.create(op.get_bind(), checkfirst=True)
+
+    # The package catalogue. Only §3.10.1's fields plus conversation_limit /
+    # duration_days (required to carry the step 26 trial semantics in-row);
+    # no data is seeded here — services/subscriptions.py creates the Free
+    # Trial row from config on first need, so the numbers have exactly one
+    # source.
+    op.create_table(
+        "plans",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("name", sa.String(length=100), nullable=False),
+        sa.Column("description", sa.String(length=1000), nullable=True),
+        sa.Column("price", sa.Integer(), nullable=False),
+        sa.Column("billing_period", sa.String(length=20), nullable=True),
+        sa.Column("duration_days", sa.Integer(), nullable=True),
+        sa.Column("message_limit", sa.Integer(), nullable=True),
+        sa.Column("conversation_limit", sa.Integer(), nullable=True),
+        sa.Column("listing_limit", sa.Integer(), nullable=True),
+        sa.Column("product_limit", sa.Integer(), nullable=True),
+        sa.Column("features", jsonb, nullable=True),
+        sa.Column(
+            "is_active", sa.Boolean(), nullable=False, server_default="true"
+        ),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False
+        ),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("name", name="uq_plans_name"),
+    )
+
+    # A client's entitlement. One row per client (the *current*
+    # subscription; also what makes "one trial per client" hold at the row
+    # level). started_at/expires_at are nullable — a PENDING subscription
+    # has not started; the entitlement window is the half-open
+    # [started_at, expires_at) interval (step 27). The plan FK deliberately
+    # has no ON DELETE: dropping a plan must not silently delete sellers'
+    # subscription rows.
+    op.create_table(
+        "subscriptions",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("client_id", sa.Integer(), nullable=False),
+        sa.Column("plan_id", sa.Integer(), nullable=False),
+        sa.Column("status", subscription_status_enum, nullable=False),
+        sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False
+        ),
+        sa.ForeignKeyConstraint(
+            ["client_id"], ["clients.id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(["plan_id"], ["plans.id"]),
+        sa.PrimaryKeyConstraint("id"),
+        # The unique constraint is the index — no separate ix_ needed.
+        sa.UniqueConstraint("client_id", name="uq_subscriptions_client_id"),
+    )
+
 
 def downgrade() -> None:
+    op.drop_table("subscriptions")
+    op.drop_table("plans")
     op.drop_table("post_messages")
     op.drop_table("post_conversations")
     op.drop_table("messages")
@@ -404,3 +483,6 @@ def downgrade() -> None:
         name="post_conversation_state_enum"
     ).drop(op.get_bind(), checkfirst=True)
     postgresql.ENUM(name="sender_type_enum").drop(op.get_bind(), checkfirst=True)
+    postgresql.ENUM(
+        name="subscription_status_enum"
+    ).drop(op.get_bind(), checkfirst=True)

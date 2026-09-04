@@ -34,6 +34,7 @@ from models.post import Post
 from models.post_conversation import PostConversation
 from models.post_message import PostMessage
 from models.product import Product
+from schemas.plans import PlanPublicItem, SellerSubscriptionResponse
 from schemas.seller import (
     DashboardSummaryResponse,
     ListingAvailabilityUpdateRequest,
@@ -54,6 +55,10 @@ from schemas.seller import (
     SupplierMessageListResponse,
 )
 from services.divar_listings import sync_listings
+from services.subscriptions import (
+    effective_subscription_status,
+    ensure_default_subscription,
+)
 from services.price_lookup import load_prices_to_db, normalize_text, refresh_lookup_cache
 
 router = APIRouter()
@@ -703,4 +708,42 @@ async def list_post_conversation_messages(
         page_size=page_size,
         total=total,
         page_count=(total + page_size - 1) // page_size,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Subscription (§3.10.4, step 28) — read-only
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/api/v1/seller/subscription",
+    response_model=SellerSubscriptionResponse,
+)
+async def get_current_subscription(
+    client_id: int = Depends(get_current_client_id),
+    db: AsyncSession = Depends(get_db),
+) -> SellerSubscriptionResponse:
+    """The authenticated seller's current subscription (§3.10.4, step 28).
+
+    Owner-scoped by the JWT-derived `client_id` only — a client_id in a
+    query param, path, or body is never read. Default Free Trial assignment
+    is delegated to the central subscription service (lazy + idempotent):
+    a seller with no subscription row gets exactly one trial created here
+    on first read; an existing row of any status is returned untouched.
+    `status` is the read-time *effective* status: a row stored ACTIVE whose
+    `expires_at` has passed is returned as EXPIRED — pure interpretation,
+    nothing is mutated on an existing row during the GET.
+    """
+    subscription = await ensure_default_subscription(db, client_id)
+    await db.commit()  # persist the lazy default assignment, if one happened
+
+    # Async sessions raise MissingGreenlet on lazy relationship access —
+    # load the referenced plan explicitly (no-op if already loaded).
+    await db.refresh(subscription, ["plan"])
+    return SellerSubscriptionResponse(
+        status=effective_subscription_status(subscription).value,
+        started_at=subscription.started_at,
+        expires_at=subscription.expires_at,
+        plan=PlanPublicItem.model_validate(subscription.plan),
     )

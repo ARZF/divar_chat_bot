@@ -11,6 +11,8 @@ from models.post_message import PostMessage
 from models.product import Product
 from models.conversation import Conversation
 from models.message import Message
+from models.plan import Plan
+from models.subscription import Subscription
 
 __all__ = [
     "Base",
@@ -24,4 +26,6 @@ __all__ = [
     "Product",
     "Conversation",
     "Message",
+    "Plan",
+    "Subscription",
 ]

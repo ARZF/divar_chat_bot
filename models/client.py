@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from models.post_conversation import PostConversation
     from models.product import Product
     from models.refresh_token import RefreshToken
+    from models.subscription import Subscription
 
 
 class Client(Base):
@@ -53,6 +54,11 @@ class Client(Base):
     products: Mapped[list[Product]] = relationship(back_populates="client")
     conversations: Mapped[list[Conversation]] = relationship(
         back_populates="client"
+    )
+    # One row per client (uq_subscriptions_client_id) — the *current*
+    # subscription (§3.10.2, step 28).
+    subscription: Mapped[Subscription | None] = relationship(
+        back_populates="client", uselist=False
     )
 
 
