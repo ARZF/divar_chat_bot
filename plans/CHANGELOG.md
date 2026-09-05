@@ -4,6 +4,68 @@
 > phase file or REFERENCE.md points here for evidence behind a specific claim, or
 > spot-check a specific date/topic.
 
+- **2026-09-05 (step 29: pricing/subscription displays)** — Both §3.10.5
+  surfaces now read the central step 28 source; the subscription response
+  gains the step 27 derived usage.
+
+  - **Derived usage in the API (read-only extension):**
+    `GET /api/v1/seller/subscription` now carries a `usage` block:
+    `{period_start, period_end, buyer_conversation_count,
+    buyer_message_count}` — `null` while a PENDING subscription has no
+    entitlement window. Computed by
+    `services/subscriptions.py::get_subscription_usage` (the single owner;
+    no second service, no endpoint logic): window-scoped COUNTs over the
+    existing rows per the step 27 contract — buyer conversations =
+    `post_conversations` rows with `created_at ∈ [started_at, expires_at)`,
+    buyer messages = `post_messages` rows with `sender_type = 'buyer'`
+    (joined through the seller's `post_conversations`) with
+    `created_at ∈ window`. Counts, never counters: no persistence, no
+    enforcement, no blocking, no admission logic (step 29 is display-only;
+    the per-conversation 50-message abuse cap was NOT implemented and is
+    not represented as a package quota anywhere in the UI).
+  - **Public pricing page (`/pricing`):** the static "nothing to show"
+    state became a runtime render of `GET /api/v1/plans`
+    (`static/js/pricing.js`, plain fetch — the catalogue is public): plan
+    name, description, price (0 renders as رایگان; non-zero as-is with the
+    toman unit), billing period and duration when present, all four limit
+    kinds, features. An empty list keeps the honest empty state; a failed
+    fetch shows an error, never invented plans. No plan value is hard-coded
+    in the template or JS (no `7`/`50`/`500`, no "Free Trial" string, no
+    prices).
+  - **Protected subscription page (`/dashboard/subscription`, new):**
+    step 12 client-side convention — the shell renders anonymously and
+    `static/js/subscription.js` loads via `DivarSession.authFetch`.
+    Workflow order per the step text: current plan (name, description) →
+    status → validity dates → usage vs package limits → available plans
+    (same public plans API; no second catalogue) → honest next action.
+    Statuses are exactly the API's four §3.10.3 values (read-time EXPIRED
+    included — the backend derives it; JS never recomputes expiry); dates
+    are formatted for display only. Usage renders as used/limit rows; a
+    null limit renders "—" plus an explanatory note (no invented
+    "unlimited" claims beyond that note). The expired state is visually
+    emphasized via the API-reported status, never mutated client-side.
+  - **CTA (payment boundary, step 26):** the "next action" section is
+    informational only — upgrade via support contact; checkout/purchase
+    deliberately unavailable. No checkout/payment endpoint exists or is
+    called, no form action, no fake success. Tests assert this
+    (endpoint/verb absence, honest wording presence).
+  - **Dashboard placeholder replaced:** `/dashboard`'s "اطلاعات بسته و
+    اشتراک هنوز در دسترس نیست" placeholder (stale once the page existed)
+    became a link to `/dashboard/subscription` — the only dashboard.html
+    change.
+  - **Tenant isolation:** unchanged model — the subscription API derives
+    `client_id` from the JWT only; usage counts filter on that id first;
+    browser-supplied `client_id` is never read (covered by existing +
+    new tests, including usage-level isolation and forged-query attempts).
+  - **Tests:** `tests/test_subscriptions.py` extended (window-scoped
+    counting incl. pre-window exclusion, bot-message exclusion, bot/seller
+    boundary, PENDING → usage null, zero-usage fresh trial, response
+    contract, usage tenant isolation); `tests/test_web.py` extended
+    (pricing page/JS contract: central API only, no hard-coded constants,
+    DOM-building only; subscription page/JS contract: authFetch, the four
+    statuses only, no client_id leakage, no expiry recomputation, no
+    purchase/checkout action; dashboard link). Full suite green.
+
 - **2026-09-04 (step 28: plans/subscriptions model + read APIs; central
   subscription service with lazy default Free Trial)** — §3.10's read model
   lands, restructured mid-implementation by maintainer architecture

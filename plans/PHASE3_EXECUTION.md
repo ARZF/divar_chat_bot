@@ -643,6 +643,26 @@ decorative financial dashboard; subscription/tenant tests plus `pytest` pass.
 **Commit:**
 `feat(web): add subscription status and package displays`.
 
+**As decided (2026-09-05):** the public `/pricing` page renders whatever
+`GET /api/v1/plans` returns at runtime (`static/js/pricing.js`, plain fetch —
+public catalogue), keeping its honest "nothing to show" state for an empty
+list; no plan name/price/limit/duration is ever hard-coded in templates or
+JS. The protected `/dashboard/subscription` page follows the step 12
+client-side convention (`static/js/subscription.js` via
+`DivarSession.authFetch`): current plan, status (the four §3.10.3 values,
+read-time EXPIRED included — never recomputed in JS), dates, usage, and
+available plans from the same public plans API. Derived usage was added as
+the minimal read-only extension of the existing
+`GET /api/v1/seller/subscription` response (step 29 instruction §12):
+`services/subscriptions.py::get_subscription_usage` computes the step 27
+window-scoped COUNTs (buyer conversations from `post_conversations`, buyer
+messages from `post_messages` `sender_type='buyer'`) over
+`[started_at, expires_at)` — no counters, no enforcement, and `usage: null`
+while a PENDING subscription has no window. The upgrade CTA is
+informational only (contact support; checkout deliberately absent per step
+26) — no checkout/payment endpoint, no fake success. The dashboard's stale
+"not yet available" placeholder became a link to the new page.
+
 ---
 
 ## Hardening and release
