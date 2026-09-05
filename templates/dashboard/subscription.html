@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+
+{% block title %}اشتراک من | دستیار فروش دیوار{% endblock %}
+
+{% block content %}
+<div class="container dashboard-layout">
+  {% include "partials/dashboard_nav.html" %}
+
+  <div class="dashboard-main">
+    <header class="page-header" aria-labelledby="subscription-title">
+      <div>
+        <h1 id="subscription-title">اشتراک من</h1>
+        <p class="page-title-note">وضعیت بستهٔ شما؛ اطلاعات پس از ورود بارگذاری می‌شود.</p>
+      </div>
+      <button type="button" class="btn" data-subscription-logout>خروج از حساب</button>
+    </header>
+
+    <div id="subscription-loading" class="state state-loading">در حال بارگذاری اشتراک…</div>
+
+    <div id="subscription-error" class="alert alert-error" role="alert" hidden>
+      <div>
+        <p id="subscription-error-text">بارگذاری اشتراک انجام نشد.</p>
+        <p><a href="/login">بازگشت به صفحهٔ ورود</a></p>
+      </div>
+    </div>
+
+    <div id="subscription-data" hidden>
+      <section aria-labelledby="current-plan-heading">
+        <h2 id="current-plan-heading">بستهٔ فعلی</h2>
+        <div class="table-wrap">
+          <table class="table-stack">
+            <tbody>
+              <tr>
+                <th scope="row">نام بسته</th>
+                <td id="subscription-plan-name">—</td>
+              </tr>
+              <tr>
+                <th scope="row">توضیحات</th>
+                <td id="subscription-plan-description">—</td>
+              </tr>
+              <tr>
+                <th scope="row">وضعیت</th>
+                <td id="subscription-status">—</td>
+              </tr>
+              <tr>
+                <th scope="row">تاریخ شروع</th>
+                <td id="subscription-started-at" class="num">—</td>
+              </tr>
+              <tr>
+                <th scope="row">تاریخ پایان</th>
+                <td id="subscription-expires-at" class="num">—</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p id="subscription-expired-note" class="alert alert-warning" role="status" hidden>
+          اعتبار این بسته به پایان رسیده است. برای ادامهٔ استفاده با پشتیبانی تماس بگیرید.
+        </p>
+      </section>
+
+      <section aria-labelledby="usage-heading">
+        <h2 id="usage-heading">مصرف</h2>
+        <div class="table-wrap">
+          <table class="table-stack" id="usage-table">
+            <thead>
+              <tr>
+                <th scope="col">بخش</th>
+                <th scope="col" class="num">مصرف</th>
+                <th scope="col" class="num">سقف بسته</th>
+              </tr>
+            </thead>
+            <tbody id="usage-tbody"></tbody>
+          </table>
+        </div>
+        <p id="usage-unavailable" class="state" hidden>
+          اطلاعات مصرف برای این اشتراک در دسترس نیست.
+        </p>
+        <p id="usage-unlimited" hidden>
+          این بسته سقف تعیین‌شده برای این بخش‌ها ندارد؛ مصرف به‌صورت شمارشی نمایش داده می‌شود.
+        </p>
+      </section>
+
+      <section aria-labelledby="available-plans-heading">
+        <h2 id="available-plans-heading">بسته‌های موجود</h2>
+        <div id="available-plans-empty" class="state" hidden>
+          <p>در حال حاضر بستهٔ دیگری برای نمایش موجود نیست.</p>
+        </div>
+        <div id="available-plans-cards" class="pricing-cards"></div>
+      </section>
+
+      <section aria-labelledby="next-action-heading">
+        <h2 id="next-action-heading">اقدام بعدی</h2>
+        <div class="alert">
+          <p>ارتقای بسته از طریق خودکار در دسترس نیست. برای تغییر بسته با پشتیبانی تماس بگیرید:</p>
+          <p>ایمیل: <a href="mailto:support@example.com">support@example.com</a></p>
+        </div>
+        <p id="subscription-cta-note">
+          خرید و ارتقای آنلاین در حال حاضر در دسترس نیست. این صفحه فقط وضعیت اشتراک شما را نشان می‌دهد.
+        </p>
+      </section>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/subscription.js"></script>
+{% endblock %}

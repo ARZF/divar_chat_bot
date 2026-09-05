@@ -127,3 +127,21 @@ async def dashboard_conversations(request: Request) -> HTMLResponse:
         "dashboard/conversations.html",
         {"dashboard_nav_active": "conversations"},
     )
+
+
+@router.get("/dashboard/subscription", response_class=HTMLResponse)
+async def dashboard_subscription(request: Request) -> HTMLResponse:
+    """Render the subscription status page (§3.10.5, step 29).
+
+    Same step 12 convention: the shell renders anonymously — no
+    subscription data, no auth, no DB access — and
+    static/js/subscription.js loads everything client-side through the
+    step 28 tenant-scoped JSON APIs (`GET /api/v1/seller/subscription` and
+    `GET /api/v1/plans`). No checkout exists (step 26 payment boundary):
+    the page's upgrade CTA is informational only.
+    """
+    return templates.TemplateResponse(
+        request,
+        "dashboard/subscription.html",
+        {"dashboard_nav_active": "subscription"},
+    )

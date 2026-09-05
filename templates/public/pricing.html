@@ -13,8 +13,22 @@
     </div>
   </header>
 
-  <section class="state" aria-labelledby="pricing-empty-title">
+  <div id="pricing-loading" class="state state-loading">در حال بارگذاری بسته‌ها…</div>
+
+  <div id="pricing-error" class="alert alert-error" role="alert" hidden>
+    <p>بارگذاری بسته‌ها انجام نشد. دوباره تلاش کنید.</p>
+  </div>
+
+  <section id="pricing-empty" class="state" aria-labelledby="pricing-empty-title" hidden>
     <h2 id="pricing-empty-title">در حال حاضر بسته‌ای برای نمایش موجود نیست.</h2>
   </section>
+
+  <section id="pricing-data" aria-labelledby="pricing-title" hidden>
+    <div id="pricing-cards" class="pricing-cards"></div>
+  </section>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/pricing.js"></script>
 {% endblock %}

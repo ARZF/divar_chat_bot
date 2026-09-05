@@ -58,6 +58,7 @@ from services.divar_listings import sync_listings
 from services.subscriptions import (
     effective_subscription_status,
     ensure_default_subscription,
+    get_subscription_usage,
 )
 from services.price_lookup import load_prices_to_db, normalize_text, refresh_lookup_cache
 
@@ -724,7 +725,8 @@ async def get_current_subscription(
     client_id: int = Depends(get_current_client_id),
     db: AsyncSession = Depends(get_db),
 ) -> SellerSubscriptionResponse:
-    """The authenticated seller's current subscription (§3.10.4, step 28).
+    """The authenticated seller's current subscription (§3.10.4, step 28;
+    step 29 adds the derived usage block).
 
     Owner-scoped by the JWT-derived `client_id` only — a client_id in a
     query param, path, or body is never read. Default Free Trial assignment
@@ -733,7 +735,10 @@ async def get_current_subscription(
     on first read; an existing row of any status is returned untouched.
     `status` is the read-time *effective* status: a row stored ACTIVE whose
     `expires_at` has passed is returned as EXPIRED — pure interpretation,
-    nothing is mutated on an existing row during the GET.
+    nothing is mutated on an existing row during the GET. `usage` is the
+    step 27 derived count — window-scoped COUNTs over this seller's own
+    `post_conversations`/`post_messages` rows, computed read-only by the
+    same service; never a stored counter, never enforced here.
     """
     subscription = await ensure_default_subscription(db, client_id)
     await db.commit()  # persist the lazy default assignment, if one happened
@@ -746,4 +751,5 @@ async def get_current_subscription(
         started_at=subscription.started_at,
         expires_at=subscription.expires_at,
         plan=PlanPublicItem.model_validate(subscription.plan),
+        usage=await get_subscription_usage(db, subscription),
     )

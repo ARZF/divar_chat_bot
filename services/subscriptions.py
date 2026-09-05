@@ -26,13 +26,16 @@ their trial the same lazy way, on first need.
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
 from models.enums import SubscriptionStatus
 from models.plan import Plan
+from models.post_conversation import PostConversation
+from models.post_message import PostMessage, PostSenderType
+from schemas.plans import SubscriptionUsage
 from models.subscription import Subscription
 
 logger = logging.getLogger("subscriptions")
@@ -171,3 +174,57 @@ def effective_subscription_status(
         if (now or datetime.now(timezone.utc)) >= expires_at:
             return SubscriptionStatus.EXPIRED
     return subscription.status
+
+
+async def get_subscription_usage(db: AsyncSession, subscription: Subscription):
+    """Derived buyer usage for one subscription (step 27 contract, step 29
+    display): window-scoped COUNTs over the existing rows — buyer
+    conversations from `post_conversations`, committed buyer messages from
+    `post_messages` — never a stored counter. The window is the half-open
+    entitlement interval [started_at, expires_at), UTC; rows created before
+    the window or at/after its end never count. Returns None when the
+    subscription has no window yet (PENDING — started_at/expires_at unset);
+    a limit-less future plan changes nothing here, the counts stand alone.
+    Read-only: this function never writes, never enforces, never blocks.
+    """
+    if subscription.started_at is None or subscription.expires_at is None:
+        return None
+
+    window = (
+        PostConversation.created_at >= subscription.started_at,
+        PostConversation.created_at < subscription.expires_at,
+    )
+    buyer_conversation_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(PostConversation)
+            .where(
+                PostConversation.client_id == subscription.client_id,
+                *window,
+            )
+        )
+    ).scalar_one()
+
+    buyer_message_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(PostMessage)
+            .join(
+                PostConversation,
+                PostMessage.post_conversation_id == PostConversation.id,
+            )
+            .where(
+                PostConversation.client_id == subscription.client_id,
+                PostMessage.sender_type == PostSenderType.BUYER,
+                PostMessage.created_at >= subscription.started_at,
+                PostMessage.created_at < subscription.expires_at,
+            )
+        )
+    ).scalar_one()
+
+    return SubscriptionUsage(
+        period_start=subscription.started_at,
+        period_end=subscription.expires_at,
+        buyer_conversation_count=buyer_conversation_count,
+        buyer_message_count=buyer_message_count,
+    )

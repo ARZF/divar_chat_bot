@@ -36,13 +36,29 @@ class PlansListResponse(BaseModel):
     items: list[PlanPublicItem]
 
 
+class SubscriptionUsage(BaseModel):
+    """Derived buyer usage over one subscription's entitlement window
+    (step 27 contract, exposed read-only in step 29). Counts, not counters —
+    `buyer_conversation_count` = window-scoped `post_conversations` rows,
+    `buyer_message_count` = window-scoped committed `post_messages` rows
+    with `sender_type = 'buyer'`. The window is the half-open UTC interval
+    [period_start, period_end)."""
+
+    period_start: datetime
+    period_end: datetime
+    buyer_conversation_count: int
+    buyer_message_count: int
+
+
 class SellerSubscriptionResponse(BaseModel):
     """The authenticated seller's current subscription (§3.10.5 display
-    fields minus usage — derived usage lands in step 29). `status` is the
-    read-time *effective* status, so a stored-ACTIVE row whose entitlement
-    window has elapsed is never presented as active."""
+    fields). `status` is the read-time *effective* status, so a stored-ACTIVE
+    row whose entitlement window has elapsed is never presented as active.
+    `usage` is the derived window-scoped count (step 29) — None only while
+    the subscription has no entitlement window yet (PENDING)."""
 
     status: str
     started_at: datetime | None
     expires_at: datetime | None
     plan: PlanPublicItem
+    usage: SubscriptionUsage | None
