@@ -35,12 +35,15 @@ from main import app
 from models.client import Client
 from models.enums import SubscriptionStatus
 from models.plan import Plan
+from models.post_conversation import PostConversation
+from models.post_message import PostMessage, PostSenderType
 from models.subscription import Subscription
 from services.subscriptions import (
     effective_subscription_status,
     ensure_default_subscription,
     get_or_create_free_trial_plan,
     get_subscription,
+    get_subscription_usage,
 )
 
 
@@ -54,6 +57,8 @@ SUBSCRIPTION_TABLES = [
     Client.__table__,
     Plan.__table__,
     Subscription.__table__,
+    PostConversation.__table__,
+    PostMessage.__table__,
 ]
 
 # Relative to the real clock because expiry is derived from `now` at read
@@ -434,7 +439,8 @@ def test_new_seller_gets_default_trial_on_first_read(client, fresh_seller_id):
     )
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"status", "started_at", "expires_at", "plan"}
+    # Step 29 extends the step 28 contract with the derived usage block.
+    assert set(body) == {"status", "started_at", "expires_at", "plan", "usage"}
     assert body["status"] == "ACTIVE"
     assert body["plan"]["name"] == settings.FREE_TRIAL_PLAN_NAME
     assert body["plan"]["message_limit"] == settings.FREE_TRIAL_BUYER_MESSAGE_LIMIT
@@ -595,3 +601,175 @@ def test_tenant_isolation_ignores_client_id_inputs(client, sellers_a_and_b):
     assert response_b.status_code == 200
     assert response_b.json()["status"] == "EXPIRED"
     assert response_b.json()["plan"]["name"] == "B Plan"
+
+
+# --------------------------------------------------------------------------------------
+# Derived usage (step 27 contract, step 29 display) — window-scoped COUNTs only
+# --------------------------------------------------------------------------------------
+
+async def _make_post_conversation(db, seller_id, conv_id, *, created_at=None):
+    conv = PostConversation(
+        client_id=seller_id,
+        divar_conversation_id=conv_id,
+        post_token=f"token_{conv_id}",
+        created_at=created_at or T,
+    )
+    db.add(conv)
+    await db.flush()
+    return conv
+
+
+async def _make_message(db, conv, *, sender, created_at, message_id=None):
+    msg = PostMessage(
+        post_conversation_id=conv.id,
+        sender_type=sender,
+        text_content="x",
+        divar_message_id=message_id,
+        created_at=created_at,
+    )
+    db.add(msg)
+    await db.flush()
+    return msg
+
+
+@pytest_asyncio.fixture
+async def seller_with_usage(session_factory):
+    """Seller A: one conversation before the window, two inside it; the
+    inside-window conversation has 2 buyer messages (1 in, 1 out of window
+    boundary tests live in the test bodies) plus 1 bot reply that must
+    never count. Seller B: one conversation with one buyer message —
+    B's rows must never leak into A's usage."""
+    async with session_factory() as db:
+        seller_a = await _make_client(db, "09120000001")
+        seller_b = await _make_client(db, "09120000002")
+        plan = await _make_plan(db, name="Usage Plan")
+        window_start = T
+        window_end = T + timedelta(days=7)
+        sub_a = Subscription(
+            client_id=seller_a.id,
+            plan_id=plan.id,
+            started_at=window_start,
+            expires_at=window_end,
+        )
+        db.add(sub_a)
+        await db.flush()
+
+        # Before the entitlement window: must not count.
+        early = await _make_post_conversation(
+            db, seller_a.id, "a-early", created_at=T - timedelta(days=30)
+        )
+        await _make_message(
+            db, early,
+            sender=PostSenderType.BUYER,
+            created_at=T - timedelta(days=30),
+            message_id="early-msg",
+        )
+        # In-window conversation with buyer messages and one bot reply.
+        in_window = await _make_post_conversation(db, seller_a.id, "a-in-1")
+        await _make_message(
+            db, in_window,
+            sender=PostSenderType.BUYER,
+            created_at=T,
+            message_id="a-msg-1",
+        )
+        await _make_message(
+            db, in_window,
+            sender=PostSenderType.BUYER,
+            created_at=T + timedelta(days=1),
+            message_id="a-msg-2",
+        )
+        await _make_message(
+            db, in_window,
+            sender=PostSenderType.BOT,
+            created_at=T + timedelta(days=1),
+        )
+        # Seller B's rows — the cross-tenant rows.
+        b_conv = await _make_post_conversation(db, seller_b.id, "b-1")
+        await _make_message(
+            db, b_conv,
+            sender=PostSenderType.BUYER,
+            created_at=T,
+            message_id="b-msg-1",
+        )
+        await db.commit()
+        return sub_a
+
+
+async def test_usage_counts_window_scoped_buyer_rows(session_factory, seller_with_usage):
+    sub = seller_with_usage
+    async with session_factory() as db:
+        usage = await get_subscription_usage(db, sub)
+        # 1 conversation in window (the pre-window one excluded); 2 buyer
+        # messages (bot reply and B's message never counted).
+        assert usage.buyer_conversation_count == 1
+        assert usage.buyer_message_count == 2
+        # The window reported is the subscription's half-open interval.
+        assert usage.period_start == sub.started_at
+        assert usage.period_end == sub.expires_at
+
+
+async def test_pending_subscription_has_no_usage(session_factory):
+    async with session_factory() as db:
+        seller = await _make_client(db, "09120000001")
+        plan = await _make_plan(db, name="Pending Plan")
+        sub = Subscription(
+            client_id=seller.id,
+            plan_id=plan.id,
+            status=SubscriptionStatus.PENDING,
+            started_at=None,
+            expires_at=None,
+        )
+        db.add(sub)
+        await db.flush()
+        assert await get_subscription_usage(db, sub) is None
+
+
+def test_subscription_response_includes_derived_usage(client, seller_with_usage):
+    """The step 29 display contract: the seller subscription API carries the
+    derived usage block alongside the step 28 fields."""
+    response = client.get(
+        "/api/v1/seller/subscription", headers=auth(seller_with_usage.client_id)
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"status", "started_at", "expires_at", "plan", "usage"}
+    usage = body["usage"]
+    assert set(usage) == {
+        "period_start", "period_end",
+        "buyer_conversation_count", "buyer_message_count",
+    }
+    assert usage["buyer_conversation_count"] == 1
+    assert usage["buyer_message_count"] == 2
+
+
+def test_new_trial_reports_zero_usage(client, fresh_seller_id):
+    """A lazily created trial has an empty entitlement window so far —
+    honest zeros, not a missing usage block."""
+    response = client.get(
+        "/api/v1/seller/subscription", headers=auth(fresh_seller_id)
+    )
+    assert response.status_code == 200
+    usage = response.json()["usage"]
+    assert usage["buyer_conversation_count"] == 0
+    assert usage["buyer_message_count"] == 0
+
+
+def test_tenant_usage_isolated(client, seller_with_usage):
+    """Seller B's rows must never appear in A's usage, and vice versa."""
+    sub = seller_with_usage
+    # A reads A's own usage — never B's conversation/message.
+    response_a = client.get(
+        "/api/v1/seller/subscription", headers=auth(sub.client_id)
+    )
+    assert response_a.json()["usage"]["buyer_message_count"] == 2
+
+    # B has no subscription row yet → lazy trial with zero usage of their
+    # own (B's actual rows belong to no entitlement window and count only
+    # for B's own future subscription, never for A's).
+    # Forge attempts: A's JWT + B's client_id must still yield A's data.
+    response_forged = client.get(
+        "/api/v1/seller/subscription",
+        headers=auth(sub.client_id),
+        params={"client_id": 99999},
+    )
+    assert response_forged.json()["usage"] == response_a.json()["usage"]

@@ -419,7 +419,7 @@ def test_dashboard_nav_lists_all_future_sections_with_current_page_marker():
     assert 'href="/dashboard" aria-current="page"' in html
 
 
-def test_dashboard_shows_identity_counts_and_honest_subscription_placeholder():
+def test_dashboard_shows_identity_counts_and_honest_subscription_link():
     with TestClient(app) as c:
         html = c.get("/dashboard").text
 
@@ -430,9 +430,9 @@ def test_dashboard_shows_identity_counts_and_honest_subscription_placeholder():
     assert 'id="post-conversation-count"' in html
     # Logout is wired to the shared session module (data attribute hook).
     assert "data-dashboard-logout" in html
-    # Subscription slot exists and states unavailability honestly — no
-    # fabricated plan names, prices, or expiry claims.
-    assert "هنوز در دسترس نیست" in html
+    # Subscription slot links to the real page (step 29) — no fabricated
+    # plan names, prices, or expiry claims inline.
+    assert 'href="/dashboard/subscription"' in html
     for invented in ("بستهٔ تجاری", "اشتراک فعال", "۳۰ روز", "پرکاربردترین"):
         assert invented not in html
 
@@ -931,3 +931,146 @@ def test_conversations_css_adds_split_view_and_mobile_navigation():
     assert ".conversation-back" in mobile_block
     desktop_block = css.split("@media (max-width: 40rem)")[0]
     assert ".conversations-selected" not in desktop_block
+
+
+# --------------------------------------------------------------------------------------
+# Phase 3 step 29 — pricing/subscription displays
+# --------------------------------------------------------------------------------------
+
+
+def test_pricing_page_loads_plan_catalogue_script_and_states():
+    with TestClient(app) as c:
+        response = c.get("/pricing")
+
+    assert response.status_code == 200
+    html = response.text
+    # The page fetches the central catalogue at runtime — the honest empty
+    # state is still in the markup (initially hidden, shown for empty API).
+    assert 'src="/static/js/pricing.js"' in html
+    assert "در حال حاضر بسته‌ای برای نمایش موجود نیست." in html
+    assert 'id="pricing-loading"' in html
+    assert 'id="pricing-error"' in html
+    assert 'id="pricing-empty"' in html
+    assert 'id="pricing-cards"' in html
+    # No plan data baked into the template — everything comes from the API.
+    for forbidden in ("Free Trial", "رایگان试用", "۵۰۰", "۵۰"):
+        assert forbidden not in html
+
+
+def test_pricing_script_uses_central_plans_api_only():
+    with TestClient(app) as c:
+        response = c.get("/static/js/pricing.js")
+
+    js = response.text
+    assert response.status_code == 200
+    # Only the step 28 API is fetched; every displayed value comes from it.
+    assert '"/api/v1/plans"' in js
+    # No hard-coded plan constants or trial numbers (step 26/27 values live
+    # only in config and the DB). "payment"/"checkout" as words may appear
+    # in comments explaining the boundary — what must never appear is an
+    # endpoint or a purchase action, asserted below.
+    for forbidden in (
+        "Free Trial",
+        '"500"',
+        '"50"',
+        '"7"',
+        "۷",
+        "۵۰۰",  # ۵۰۰
+        "fetch(",
+    ):
+        assert forbidden not in js.replace("fetch(PLANS_URL)", "")
+    assert js.count("fetch(") == 1  # exactly the one catalogue fetch
+    # No purchase action of any kind — endpoint or verb. (The comment may
+    # say "no checkout exists": explaining the boundary is not a claim.)
+    for forbidden in ("/api/v1/payments", "subscription/checkout", "POST", "PATCH"):
+        assert forbidden not in js
+    # DOM-building only — never innerHTML.
+    assert "innerHTML" not in js
+    assert "createElement" in js
+
+
+def test_subscription_page_renders_shell_with_all_display_states():
+    with TestClient(app) as c:
+        response = c.get("/dashboard/subscription")
+
+    assert response.status_code == 200
+    html = response.text
+    assert 'src="/static/js/subscription.js"' in html
+    assert 'id="subscription-loading"' in html
+    assert 'id="subscription-error"' in html
+    assert 'id="subscription-data"' in html
+    # Current plan / status / dates / usage / available plans / next action.
+    assert 'id="subscription-plan-name"' in html
+    assert 'id="subscription-status"' in html
+    assert 'id="subscription-started-at"' in html
+    assert 'id="subscription-expires-at"' in html
+    assert 'id="usage-tbody"' in html
+    assert 'id="available-plans-cards"' in html
+    assert 'id="subscription-expired-note"' in html
+    # Nav marks the subscription page current.
+    assert 'href="/dashboard/subscription" aria-current="page"' in html
+
+
+def test_subscription_script_uses_step28_apis_and_session_module():
+    with TestClient(app) as c:
+        response = c.get("/static/js/subscription.js")
+
+    js = response.text
+    assert response.status_code == 200
+    # Data comes only through the authenticated fetch helper (tenant scoping
+    # stays with the JWT-based backend) plus the public plans catalogue.
+    assert "DivarSession.authFetch" in js
+    assert '"/api/v1/seller/subscription"' in js
+    assert '"/api/v1/plans"' in js
+    # No client_id ever leaves the browser, no invented statuses, no
+    # expiry recomputation, no DOM injection.
+    for forbidden in (
+        "client_id",
+        "TRIAL",
+        "PAID",
+        "UPGRADING",
+        "PAYMENT_PENDING",
+        "localStorage",
+        "innerHTML",
+        "insertAdjacentHTML",
+        "sendMessage",
+        "expires_at =",
+        "started_at +",
+    ):
+        assert forbidden not in js
+    # Only the four §3.10.3 statuses are mapped — no frontend-only states.
+    for allowed in ("ACTIVE", "EXPIRED", "CANCELLED", "PENDING"):
+        assert allowed in js
+
+
+def test_subscription_script_and_page_make_no_purchase_or_checkout_claim():
+    with TestClient(app) as c:
+        js = c.get("/static/js/subscription.js").text
+        html = c.get("/dashboard/subscription").text
+
+    # No fake checkout/payment endpoint is ever called, and no purchase
+    # mutation is attempted (step 26 payment boundary). The words may appear
+    # in comments/notes explaining that checkout is unavailable — what must
+    # never appear is an endpoint, a form action, or a "purchase succeeded"
+    # claim.
+    for source in (js, html):
+        assert "/api/v1/payments" not in source
+        assert "subscription/checkout" not in source
+        assert "action=" not in source
+        assert "method: \"POST\"" not in source
+        assert "method: 'POST'" not in source
+        assert "method: \"PATCH\"" not in source
+    # The CTA states the actual non-payment next action honestly and the
+    # unavailability is said plainly.
+    assert "با پشتیبانی تماس بگیرید" in html
+    assert "در دسترس نیست" in html
+
+
+def test_dashboard_links_to_subscription_page():
+    with TestClient(app) as c:
+        html = c.get("/dashboard").text
+
+    # The old "not yet available" placeholder is gone — the dashboard now
+    # points at the real subscription page.
+    assert "هنوز در دسترس نیست" not in html
+    assert 'href="/dashboard/subscription"' in html
