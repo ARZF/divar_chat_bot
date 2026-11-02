@@ -901,7 +901,7 @@
   changed.
 
   **Schema verification.** A live PostgreSQL autogenerate check was not possible in this
-  environment: the configured database is `postgresql+asyncpg://divar:divar@localhost:5432/divar`,
+  environment: the configured database is `[REDACTED_DATABASE_URL]`,
   but PostgreSQL was unreachable and Docker was unavailable. The required static fallback
   was run instead. The current SQLAlchemy metadata reports `Conversation.current_state` as
   `String(50)`, `nullable=False`, Python-side default `'START'`, and `server_default=None`.
@@ -1242,7 +1242,7 @@
 - **2026-07-20 (final confirmation)** — Fully confirmed `GET /v1/open-platform/users` against
   the live API using a real access token obtained through the `/oauth/dev/*` bootstrap flow
   (scope `USER_PHONE USER_ID offline_access`). Response:
-  `{"phone_numbers": ["09395020382"], "phone_number": "09395020382", "user_id": "..."}`.
+  `{"phone_numbers": ["[REDACTED_PHONE]"], "phone_number": "[REDACTED_PHONE]", "user_id": "..."}`.
   **Confirms:** (1) `GET` is correct — `ReadMe.md`'s `POST` example was simply wrong, not a
   version-skew artifact. (2) The real API returns **both** response shapes simultaneously
   (`phone_number` singular AND `phone_numbers` array in the same response) — neither doc was
